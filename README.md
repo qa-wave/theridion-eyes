@@ -1,121 +1,82 @@
-# Theridion
+# Theridion — Modern API Testing Platform
 
-Modern, open-source API testing platform — REST, GraphQL, gRPC, SOAP, with built-in performance and security testing.
+A local-first, open-source desktop application for testing APIs across every protocol. Built for developers and QA engineers who want full control over their API workflows without cloud lock-in.
 
-Named after *Theridion*, a genus of spiders that build chaotic three-dimensional cobwebs — a fitting metaphor for the entangled webs of modern API dependencies.
+![Theridion Screenshot](docs/screenshot.png)
 
-## Status
+## Key Features
 
-🚧 **Pre-alpha — under active development.**
+- **REST** — Full HTTP client with environment variables, auth helpers, and response assertions
+- **SOAP / WSDL** — Inspect services, execute operations, WS-Security support
+- **GraphQL** — Introspection, variables panel, and query editor
+- **gRPC** — Server reflection and unary invocation
+- **WebSocket** — Connect, send frames, inspect messages
+- **Kafka** — Produce and consume messages
+- **Load Testing** — Embedded load runner with percentile stats and comparison reports
+- **AI Test Generation** — Generate test cases from your API specs via local LLMs (Ollama)
+- **Code Generation** — Export requests as Python, JavaScript, Go, Java, C#, cURL, PHP, or Ruby
+- **Collection Runner** — Execute entire collections with assertions and HTML trace reports
+- **File-Based Projects** — Git-friendly storage, no cloud sync required
 
-## Goals
-
-- **One tool for the full API lifecycle:** design → functional test → contract test → load test → security scan → mock server.
-- **Native multiplatform desktop app** for macOS, Linux, and Windows (Tauri + Python).
-- **Modern UX** — file-based projects (git-friendly), scriptable, keyboard-first.
-- **Best-in-class SOAP support**, including WS-Security, MTOM, schema validation.
-- **Open source** — community-owned, no telemetry, no lock-in.
-
-## Architecture
-
-```
-┌─────────────────────────────────────────┐
-│  Tauri shell (Rust, ~5 MB)              │
-│  ┌───────────────────────────────────┐  │
-│  │ React + TypeScript + Tailwind      │  │
-│  │ Monaco editor, shadcn/ui           │  │
-│  └────────────────┬──────────────────┘  │
-└───────────────────┼─────────────────────┘
-                    │ HTTP/WebSocket
-                    │ on localhost:RANDOM
-┌───────────────────┴─────────────────────┐
-│  Python FastAPI sidecar                  │
-│  ┌─────────────────────────────────┐    │
-│  │  Protocol executors:             │    │
-│  │    REST (httpx) · SOAP (zeep)    │    │
-│  │    gRPC · GraphQL                │    │
-│  ├─────────────────────────────────┤    │
-│  │  Project store (file-based)      │    │
-│  │  Assertion engine                │    │
-│  │  Load test runner (locust)       │    │
-│  │  Security scanner (ZAP API)      │    │
-│  └─────────────────────────────────┘    │
-└─────────────────────────────────────────┘
-```
-
-## Repository structure
-
-```
-theridion/
-├── apps/
-│   ├── desktop/    # Tauri + React frontend
-│   └── sidecar/    # Python FastAPI backend
-├── .github/
-│   └── workflows/  # Multi-platform CI/CD
-└── logos/          # Brand assets
-```
-
-## Development
-
-Requires:
-
-- Node.js 24+
-- pnpm 10+
-- Rust (latest stable)
-- Python 3.13+
-- [uv](https://github.com/astral-sh/uv) (Python package manager)
-
-### Bundle the sidecar
-
-The desktop app embeds the Python sidecar via Tauri's `externalBin`
-mechanism. Before the first `pnpm tauri dev`, build the binary:
+## Quick Start
 
 ```bash
-cd apps/desktop
+# 1. Clone and install
+git clone https://github.com/qa-wave/theridion.git
+cd theridion/apps/desktop
 pnpm install
+
+# 2. Build the Python sidecar
 pnpm sidecar:bundle
-```
 
-This calls PyInstaller against `apps/sidecar/sidecar.spec` and stages
-the resulting binary into `apps/desktop/src-tauri/binaries/` with the
-target-triple suffix Tauri expects. Re-run after Python changes.
-
-### Desktop dev
-
-```bash
+# 3. Launch the app
 pnpm tauri dev
 ```
 
-Tauri spawns the bundled sidecar on a random loopback port, parses
-`THERIDION_SIDECAR_READY pid=… port=… home=…` from its stdout, and
-exposes the port to the frontend via the `get_sidecar_port` Tauri
-command. Cold start of the bundled binary is ~6–8 s.
+**Prerequisites:** Node.js 24+, pnpm 10+, Rust (stable), Python 3.13+, [uv](https://github.com/astral-sh/uv)
 
-### Sidecar standalone (for fast Python iteration)
+## Why Theridion?
 
-If you'd rather skip the rebundle loop:
+| | Postman | SoapUI | Bruno | Theridion |
+|---|---|---|---|---|
+| **Local-first / git-friendly** | Cloud-first | File-based | File-based | File-based |
+| **SOAP + WS-Security** | Limited | Full | None | Full |
+| **Load testing** | Cloud only | Built-in | None | Built-in |
+| **Security scanning** | None | Built-in | None | Built-in |
+| **Modern UI** | Yes | Dated | Yes | Yes |
+| **Open source** | No | Partial | Yes | Yes |
+| **Test runner + trace report** | Basic | JUnit XML | None | Playwright-style |
+
+Named after *Theridion*, a genus of spiders that build chaotic three-dimensional cobwebs — a fitting metaphor for the entangled dependencies of modern APIs.
+
+## Tech Stack
+
+| Layer | Technology |
+|---|---|
+| Desktop shell | Tauri 2 (Rust) |
+| Frontend | React 18 + TypeScript + Tailwind CSS + Monaco Editor |
+| Backend | Python FastAPI sidecar (bundled via PyInstaller) |
+| HTTP engine | httpx with HTTP/2 |
+| SOAP | zeep |
+| Package management | pnpm (JS), uv (Python) |
+
+## Development
 
 ```bash
-cd apps/sidecar
-uv sync
-THERIDION_PORT=8765 uv run python -m theridion_sidecar.main
+# Run sidecar tests (< 1s)
+cd apps/sidecar && uv run pytest -q
+
+# Run E2E tests (~9s)
+cd apps/desktop && pnpm test:e2e
+
+# TypeScript type check
+cd apps/desktop && pnpm typecheck
+
+# Standalone sidecar for fast Python iteration
+cd apps/sidecar && THERIDION_PORT=8765 uv run python -m theridion_sidecar.main
 ```
 
-…then run the frontend in a regular browser tab via `pnpm dev` (port
-1420). Without `__TAURI_INTERNALS__` the frontend falls back to
-`http://127.0.0.1:8765`.
-
-### E2E tests
-
-```bash
-cd apps/desktop
-pnpm test:e2e         # headless run
-pnpm test:e2e:ui      # Playwright's interactive UI
-```
-
-E2E spawns its own isolated sidecar (port 8766, `/tmp/theridion-e2e`
-home) and Vite (port 1421); does not collide with anything you have
-running on default dev ports.
+See [CLAUDE.md](./CLAUDE.md) for full architecture docs, conventions, and roadmap.
 
 ## License
 
