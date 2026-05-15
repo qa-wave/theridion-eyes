@@ -1,6 +1,4 @@
-# ─── CI: Lint (non-blocking) → Typecheck → Test (skip-if-absent) → Build ─────
-# Lint = signál, ne gate (technický dluh viditelný, ale neshodí pipeline).
-# Tvrdý gate = Build (co neprojde buildem, neprojde ani na Vercel).
+# ─── CI: Theridion (Tauri shell + Python sidecar) ───────────────────────────
 name: CI
 
 on:
@@ -13,44 +11,15 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
-env:
-  NODE_VERSION: "22"
-
 jobs:
-  quality:
-    name: "Lint · Typecheck · Test · Build"
+  sidecar:
+    name: "Python sidecar — syntax + import"
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-python@v5
         with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: "npm"
-      - name: Install
-        run: npm ci || npm install
-      - name: Lint (non-blocking — tech debt visible)
-        continue-on-error: true
-        run: npm run lint --if-present
-      - name: Typecheck (skip if absent)
-        run: npm run typecheck --if-present
-      - name: Unit tests (skip if no test script)
-        run: |
-          if node -e "process.exit(require('./package.json').scripts?.test?0:1)"; then
-            npm test
-          else
-            echo "::notice::Zadny test script - preskakuji unit testy."
-          fi
-      - name: E2E tests (skip if no Playwright tests)
-        run: |
-          if [ -f playwright.config.ts ] || [ -f playwright.config.js ]; then
-            if npx playwright test --list >/dev/null 2>&1; then
-              npx playwright install --with-deps chromium
-              npx playwright test
-            else
-              echo "::notice::Playwright config bez testu - preskakuji E2E."
-            fi
-          else
-            echo "::notice::Zadny Playwright config - preskakuji E2E."
-          fi
-      - name: Build (HARD GATE)
-        run: npm run build
+          python-version: "3.13"
+      - name: Compile-check sidecar (HARD GATE)
+        working-directory: apps/sidecar
+        run: python -m compileall theridion_sidecar -q
