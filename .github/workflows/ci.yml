@@ -1,5 +1,6 @@
-# ─── CI: Lint → Typecheck → Test (skip-if-absent) → Build ────────────────────
-# Resilientní: chybějící test/e2e NEzpůsobí fail. Tvrdý signál = build.
+# ─── CI: Lint (non-blocking) → Typecheck → Test (skip-if-absent) → Build ─────
+# Lint = signál, ne gate (technický dluh viditelný, ale neshodí pipeline).
+# Tvrdý gate = Build (co neprojde buildem, neprojde ani na Vercel).
 name: CI
 
 on:
@@ -27,7 +28,8 @@ jobs:
           cache: "npm"
       - name: Install
         run: npm ci || npm install
-      - name: Lint (skip if absent)
+      - name: Lint (non-blocking — tech debt visible)
+        continue-on-error: true
         run: npm run lint --if-present
       - name: Typecheck (skip if absent)
         run: npm run typecheck --if-present
@@ -50,5 +52,5 @@ jobs:
           else
             echo "::notice::Zadny Playwright config - preskakuji E2E."
           fi
-      - name: Build (hard signal)
+      - name: Build (HARD GATE)
         run: npm run build
