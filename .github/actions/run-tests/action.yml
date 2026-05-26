@@ -1,0 +1,63 @@
+name: "Theridion Run Tests"
+description: "Run Theridion API tests against a .thr collection"
+branding:
+  icon: "check-circle"
+  color: "green"
+
+inputs:
+  collection:
+    description: "Path to .thr file or directory"
+    required: true
+  environment:
+    description: "Environment name"
+    required: false
+    default: "ci"
+  reporter:
+    description: "Reporter: console, json, junit, html"
+    required: false
+    default: "junit"
+  output:
+    description: "Output directory for reports"
+    required: false
+    default: "./theridion-results"
+  hub-url:
+    description: "Theridion Hub URL for result push"
+    required: false
+    default: ""
+  hub-token:
+    description: "Bearer token for Hub authentication"
+    required: false
+    default: ""
+  retries:
+    description: "Number of retries for failed requests"
+    required: false
+    default: "1"
+  workers:
+    description: "Number of parallel workers"
+    required: false
+    default: "1"
+  args:
+    description: "Additional CLI args passed verbatim to theridion test"
+    required: false
+    default: ""
+
+runs:
+  using: "docker"
+  image: "ghcr.io/theridion/runner:1"
+  env:
+    THERIDION_HUB_TOKEN: ${{ inputs.hub-token }}
+  args:
+    - test
+    - ${{ inputs.collection }}
+    - --env
+    - ${{ inputs.environment }}
+    - --reporter
+    - ${{ inputs.reporter }}
+    - --output
+    - ${{ inputs.output }}
+    - --retries
+    - ${{ inputs.retries }}
+    - --workers
+    - ${{ inputs.workers }}
+    - --hub
+    - ${{ inputs.hub-url }}
