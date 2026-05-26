@@ -1,4 +1,7 @@
-# ─── CI: Theridion (Tauri shell + Python sidecar) ───────────────────────────
+# ─── CI: Theridion — full production gate ────────────────────────────────────
+# Required checks (all must pass before PR can merge):
+#   sidecar-test, runner-test, studio-typecheck, hub-typecheck,
+#   hub-test, studio-test, studio-e2e, rust-test
 name: CI
 
 on:
@@ -12,14 +15,296 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  sidecar:
-    name: "Python sidecar — syntax + import"
+  # ─── Python sidecar ───────────────────────────────────────────────────────
+  sidecar-test:
+    name: "sidecar — pytest"
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Install system deps (xmlsec + libwebkit for Tauri sidecar build)
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y --no-install-recommends \
+            libxmlsec1-dev libxmlsec1-openssl
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-      - name: Compile-check sidecar (HARD GATE)
+
+      - uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+
+      - name: Install sidecar deps
         working-directory: apps/sidecar
-        run: python -m compileall theridion_sidecar -q
+        run: uv sync --frozen
+
+      - name: Run sidecar pytest
+        working-directory: apps/sidecar
+        run: uv run pytest -q --tb=short
+
+  # ─── Python runner ────────────────────────────────────────────────────────
+  runner-test:
+    name: "runner — pytest"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+
+      - name: Install runner deps
+        working-directory: apps/runner
+        run: uv sync --frozen
+
+      - name: Run runner pytest
+        working-directory: apps/runner
+        run: uv run pytest -q --tb=short
+
+  # ─── Hub (Next.js) ────────────────────────────────────────────────────────
+  hub-typecheck:
+    name: "hub — typecheck"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Install hub deps
+        working-directory: apps/hub
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck hub
+        working-directory: apps/hub
+        run: pnpm typecheck
+
+  hub-test:
+    name: "hub — unit tests"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Install hub deps
+        working-directory: apps/hub
+        run: pnpm install --frozen-lockfile
+
+      - name: Run hub tests
+        working-directory: apps/hub
+        run: pnpm test
+
+  # ─── Studio (Tauri + React) ───────────────────────────────────────────────
+  studio-typecheck:
+    name: "studio — typecheck"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Install studio deps
+        working-directory: apps/studio
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck studio
+        working-directory: apps/studio
+        run: pnpm typecheck
+
+  studio-test:
+    name: "studio — unit tests"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Install studio deps
+        working-directory: apps/studio
+        run: pnpm install --frozen-lockfile
+
+      - name: Run studio unit tests
+        working-directory: apps/studio
+        run: pnpm test
+
+  studio-e2e:
+    name: "studio — Playwright E2E"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system deps (xvfb + xmlsec for sidecar)
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y --no-install-recommends \
+            xvfb libxmlsec1-dev libxmlsec1-openssl \
+            libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+
+      - name: Install studio deps
+        working-directory: apps/studio
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Playwright browsers
+        working-directory: apps/studio
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Install sidecar deps (for E2E sidecar spawn)
+        working-directory: apps/sidecar
+        run: uv sync --frozen
+
+      - name: Run E2E tests (xvfb)
+        working-directory: apps/studio
+        run: xvfb-run --auto-servernum pnpm test:e2e
+
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: apps/studio/playwright-report/
+          retention-days: 7
+
+  # ─── Rust (Tauri shell) ───────────────────────────────────────────────────
+  rust-test:
+    name: "rust — cargo test --lib"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux system deps
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev \
+            libxmlsec1-dev libxmlsec1-openssl
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/studio/src-tauri
+
+      - name: Run Rust unit tests
+        working-directory: apps/studio/src-tauri
+        run: cargo test --lib
+
+  # ─── Security: dependency audit ───────────────────────────────────────────
+  security:
+    name: "security — dep audit"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/studio/src-tauri
+
+      - name: pip-audit sidecar
+        working-directory: apps/sidecar
+        run: |
+          uv sync --frozen
+          uv run pip-audit --format=json --output=pip-audit-sidecar.json || true
+          uv run pip-audit --format=columns
+        continue-on-error: true
+
+      - name: pip-audit runner
+        working-directory: apps/runner
+        run: |
+          uv sync --frozen
+          uv run pip-audit --format=json --output=pip-audit-runner.json || true
+          uv run pip-audit --format=columns
+        continue-on-error: true
+
+      - name: npm audit hub (fail on high+)
+        working-directory: apps/hub
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm audit --audit-level=high
+
+      - name: npm audit studio (fail on high+)
+        working-directory: apps/studio
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm audit --audit-level=high
+
+      - name: cargo audit
+        working-directory: apps/studio/src-tauri
+        run: |
+          cargo install cargo-audit --quiet
+          cargo audit
+        continue-on-error: true
+
+      - name: Upload audit reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: audit-reports
+          path: |
+            apps/sidecar/pip-audit-sidecar.json
+            apps/runner/pip-audit-runner.json
+          if-no-files-found: ignore
+          retention-days: 30

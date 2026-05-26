@@ -1,0 +1,167 @@
+version: 2
+
+updates:
+  # ─── GitHub Actions ────────────────────────────────────────────────────────
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "08:00"
+      timezone: "Europe/Prague"
+    labels:
+      - "dependencies"
+      - "github-actions"
+    commit-message:
+      prefix: "ci"
+    groups:
+      github-actions-security:
+        applies-to: security-updates
+        patterns: ["*"]
+      github-actions-all:
+        applies-to: version-updates
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  # ─── Hub (apps/hub) — npm / pnpm ──────────────────────────────────────────
+  - package-ecosystem: "npm"
+    directory: "/apps/hub"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "08:00"
+      timezone: "Europe/Prague"
+    labels:
+      - "dependencies"
+      - "hub"
+      - "javascript"
+    commit-message:
+      prefix: "deps(hub)"
+    groups:
+      hub-security:
+        applies-to: security-updates
+        patterns: ["*"]
+      hub-next:
+        patterns: ["next", "react", "react-dom", "@types/react", "@types/react-dom"]
+        update-types: ["minor", "patch"]
+      hub-dev:
+        applies-to: version-updates
+        dependency-type: "development"
+        update-types: ["minor", "patch"]
+    ignore:
+      # Only security updates for major bumps — avoid accidental breaking changes
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+
+  # ─── Studio (apps/studio) — npm / pnpm ────────────────────────────────────
+  - package-ecosystem: "npm"
+    directory: "/apps/studio"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "08:00"
+      timezone: "Europe/Prague"
+    labels:
+      - "dependencies"
+      - "studio"
+      - "javascript"
+    commit-message:
+      prefix: "deps(studio)"
+    groups:
+      studio-security:
+        applies-to: security-updates
+        patterns: ["*"]
+      studio-tauri:
+        patterns: ["@tauri-apps/*"]
+        update-types: ["minor", "patch"]
+      studio-react:
+        patterns: ["react", "react-dom", "@types/react", "@types/react-dom"]
+        update-types: ["minor", "patch"]
+      studio-dev:
+        applies-to: version-updates
+        dependency-type: "development"
+        update-types: ["minor", "patch"]
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+
+  # ─── Sidecar (apps/sidecar) — pip ─────────────────────────────────────────
+  - package-ecosystem: "pip"
+    directory: "/apps/sidecar"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "08:00"
+      timezone: "Europe/Prague"
+    labels:
+      - "dependencies"
+      - "sidecar"
+      - "python"
+    commit-message:
+      prefix: "deps(sidecar)"
+    groups:
+      sidecar-security:
+        applies-to: security-updates
+        patterns: ["*"]
+      sidecar-fastapi:
+        patterns: ["fastapi", "pydantic", "uvicorn", "httpx"]
+        update-types: ["minor", "patch"]
+      sidecar-all-patch:
+        applies-to: version-updates
+        update-types: ["patch"]
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+
+  # ─── Runner (apps/runner) — pip ───────────────────────────────────────────
+  - package-ecosystem: "pip"
+    directory: "/apps/runner"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "08:00"
+      timezone: "Europe/Prague"
+    labels:
+      - "dependencies"
+      - "runner"
+      - "python"
+    commit-message:
+      prefix: "deps(runner)"
+    groups:
+      runner-security:
+        applies-to: security-updates
+        patterns: ["*"]
+      runner-all-patch:
+        applies-to: version-updates
+        update-types: ["patch"]
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+
+  # ─── Cargo (apps/studio/src-tauri) ────────────────────────────────────────
+  - package-ecosystem: "cargo"
+    directory: "/apps/studio/src-tauri"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "08:00"
+      timezone: "Europe/Prague"
+    labels:
+      - "dependencies"
+      - "rust"
+      - "tauri"
+    commit-message:
+      prefix: "deps(rust)"
+    groups:
+      cargo-security:
+        applies-to: security-updates
+        patterns: ["*"]
+      cargo-tauri:
+        patterns: ["tauri", "tauri-*"]
+        update-types: ["minor", "patch"]
+      cargo-all-patch:
+        applies-to: version-updates
+        update-types: ["patch"]
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]

@@ -8,74 +8,184 @@ permissions:
   contents: write
 
 jobs:
+  # ─── Build + sign Tauri desktop binaries ─────────────────────────────────
   build:
     strategy:
+      fail-fast: false
       matrix:
         include:
           - os: macos-latest
             target: aarch64-apple-darwin
+            platform: macos-arm64
           - os: macos-13
             target: x86_64-apple-darwin
+            platform: macos-x64
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
+            platform: linux-x64
           - os: windows-latest
             target: x86_64-pc-windows-msvc
+            platform: windows-x64
+
     runs-on: ${{ matrix.os }}
+
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Node
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: 24
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v4
         with:
           version: 10
 
-      - name: Install frontend deps
+      - name: Install studio frontend deps
         working-directory: apps/studio
         run: pnpm install --frozen-lockfile
 
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
 
-      - name: Rust cache
-        uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2
         with:
           workspaces: apps/studio/src-tauri
           key: ${{ matrix.target }}
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
-          python-version: '3.13'
+          python-version: "3.13"
 
-      - name: Setup uv
-        uses: astral-sh/setup-uv@v4
+      - uses: astral-sh/setup-uv@v4
         with:
           enable-cache: true
 
-      - name: Build sidecar
+      # ── Linux system deps (xmlsec + Tauri GTK + WebKit) ─────────────────
+      - name: Install Linux system deps
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y --no-install-recommends \
+            libxmlsec1-dev libxmlsec1-openssl \
+            libwebkit2gtk-4.1-dev libappindicator3-dev \
+            librsvg2-dev patchelf
+
+      # ── macOS: import Apple Developer certificate ────────────────────────
+      - name: Import Apple Developer certificate
+        if: runner.os == 'macOS' && env.APPLE_CERTIFICATE != ''
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          echo "$APPLE_CERTIFICATE" | base64 --decode > certificate.p12
+          security create-keychain -p "" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "" build.keychain
+          security import certificate.p12 -k build.keychain \
+            -P "$APPLE_CERTIFICATE_PASSWORD" \
+            -T /usr/bin/codesign
+          security set-key-partition-list \
+            -S apple-tool:,apple: -s -k "" build.keychain
+          rm -f certificate.p12
+        continue-on-error: true
+
+      # ── Build PyInstaller sidecar bundle ─────────────────────────────────
+      - name: Build sidecar bundle
         working-directory: apps/sidecar
         run: bash scripts/build-bundle.sh
 
-      - name: Install Linux deps
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev
-
-      - name: Build Tauri app
+      # ── Tauri build + sign + release ─────────────────────────────────────
+      - name: Build and release Tauri app
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Tauri updater signing
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # macOS notarization (optional — signing skipped if secrets missing)
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # Windows Azure Trusted Signing (optional — unsigned build if missing)
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
         with:
           projectPath: apps/studio
           tagName: ${{ github.ref_name }}
-          releaseName: 'Theridion ${{ github.ref_name }}'
-          releaseBody: 'See [CHANGELOG](https://github.com/qa-wave/theridion/blob/main/CHANGELOG.md)'
+          releaseName: "Theridion ${{ github.ref_name }}"
+          releaseBody: |
+            See [CHANGELOG](https://github.com/qa-wave/theridion/blob/main/CHANGELOG.md)
           releaseDraft: true
+          args: --target ${{ matrix.target }}
+
+      # ── SBOM: Python sidecar ─────────────────────────────────────────────
+      - name: Generate Python SBOM (sidecar)
+        if: runner.os == 'Linux'
+        working-directory: apps/sidecar
+        run: |
+          uv run pip install cyclonedx-bom --quiet
+          uv run cyclonedx-py environment \
+            --output-format JSON \
+            --outfile sbom-sidecar-${{ matrix.platform }}.json
+        continue-on-error: true
+
+      # ── SBOM: Node studio ─────────────────────────────────────────────────
+      - name: Generate Node SBOM (studio)
+        if: runner.os == 'Linux'
+        working-directory: apps/studio
+        run: |
+          pnpm add -D @cyclonedx/cyclonedx-npm --prefer-offline 2>/dev/null || true
+          pnpm exec cyclonedx-npm \
+            --output-file sbom-studio-${{ matrix.platform }}.json \
+            --output-format JSON \
+            --package-lock-only
+        continue-on-error: true
+
+      # ── SBOM: Cargo ───────────────────────────────────────────────────────
+      - name: Generate Cargo SBOM
+        if: runner.os == 'Linux'
+        working-directory: apps/studio/src-tauri
+        run: |
+          cargo install cargo-cyclonedx --quiet
+          cargo cyclonedx --format json \
+            --output-cdx sbom-rust-${{ matrix.platform }}.json
+        continue-on-error: true
+
+      - name: Upload SBOMs to release
+        if: runner.os == 'Linux'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            apps/sidecar/sbom-sidecar-*.json
+            apps/studio/sbom-studio-*.json
+            apps/studio/src-tauri/sbom-rust-*.json
+          draft: true
+        continue-on-error: true
+
+  # ─── SBOM summary job (all platforms → merge) ────────────────────────────
+  sbom-summary:
+    name: "SBOM — upload all artifacts"
+    needs: build
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Download SBOM artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: sbom-*
+          path: sboms/
+          merge-multiple: true
+        continue-on-error: true
+
+      - name: Upload consolidated SBOMs
+        uses: actions/upload-artifact@v4
+        with:
+          name: sboms-${{ github.ref_name }}
+          path: sboms/
+          if-no-files-found: ignore
+          retention-days: 90

@@ -1,0 +1,124 @@
+name: Hub — post-deploy smoke test
+
+on:
+  deployment_status:
+
+concurrency:
+  group: hub-smoke-${{ github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    name: "hub — smoke test after Vercel deploy"
+    # Only run when Vercel (or any deployer) reports success for the hub app.
+    # Vercel sets environment to "Production" / "Preview" in its deployment status events.
+    if: |
+      github.event.deployment_status.state == 'success' &&
+      (
+        contains(github.event.deployment.environment, 'hub') ||
+        github.event.deployment_status.environment_url != '' &&
+        contains(github.event.deployment_status.environment_url, 'hub')
+      )
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve Hub URL
+        id: hub-url
+        run: |
+          # Prefer the deployment's live URL; fall back to the canonical prod URL.
+          ENV_URL="${{ github.event.deployment_status.environment_url }}"
+          if [[ -z "$ENV_URL" ]]; then
+            ENV_URL="https://hub.qawave.ai"
+          fi
+          echo "url=$ENV_URL" >> "$GITHUB_OUTPUT"
+          echo "Smoke-testing Hub at: $ENV_URL"
+
+      - name: Health check — GET /api/health → 200
+        run: |
+          set -e
+          RESPONSE=$(curl -sf \
+            --max-time 15 \
+            --retry 3 \
+            --retry-delay 5 \
+            "${{ steps.hub-url.outputs.url }}/api/health")
+          echo "Response: $RESPONSE"
+          echo "$RESPONSE" | python3 -c "
+          import sys, json
+          data = json.load(sys.stdin)
+          status = data.get('status', '')
+          if status not in ('ok', 'healthy'):
+              print(f'Unexpected health status: {status}')
+              sys.exit(1)
+          print(f'Health OK: {status}')
+          " || {
+            echo "::error::Hub health check failed at ${{ steps.hub-url.outputs.url }}/api/health"
+            exit 1
+          }
+
+      - name: Ingest smoke test — POST /api/ingest → 200/201
+        env:
+          HUB_INGEST_TOKEN: ${{ secrets.HUB_INGEST_TOKEN }}
+        run: |
+          set -e
+          if [[ -z "$HUB_INGEST_TOKEN" ]]; then
+            echo "::warning::HUB_INGEST_TOKEN secret not set — skipping ingest smoke test"
+            exit 0
+          fi
+
+          # Minimal valid RunResult payload
+          PAYLOAD=$(python3 -c "
+          import json, time
+          print(json.dumps({
+            'suite': 'ci-smoke',
+            'timestamp': int(time.time()),
+            'environment': 'ci',
+            'results': [],
+            'metadata': {'source': 'release-hub-smoke', 'sha': '${{ github.sha }}'}
+          }))
+          ")
+
+          HTTP_CODE=$(curl -s -o /tmp/ingest-response.txt -w "%{http_code}" \
+            --max-time 15 \
+            --retry 2 \
+            --retry-delay 3 \
+            -X POST \
+            -H "Authorization: Bearer $HUB_INGEST_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD" \
+            "${{ steps.hub-url.outputs.url }}/api/ingest")
+
+          cat /tmp/ingest-response.txt
+          echo "HTTP status: $HTTP_CODE"
+
+          if [[ "$HTTP_CODE" != "200" && "$HTTP_CODE" != "201" ]]; then
+            echo "::error::Hub ingest returned HTTP $HTTP_CODE (expected 200 or 201)"
+            exit 1
+          fi
+          echo "Ingest smoke test passed (HTTP $HTTP_CODE)"
+
+      - name: Notify Slack on failure
+        if: failure() && env.SLACK_WEBHOOK_URL != ''
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          curl -sf -X POST "$SLACK_WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            -d '{
+              "text": ":red_circle: *Hub smoke test FAILED* after deploy to ${{ steps.hub-url.outputs.url }}\nCommit: `${{ github.sha }}`\nSee: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            }'
+
+      - name: Post GitHub commit status on failure
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha: context.sha,
+              state: 'failure',
+              context: 'hub / smoke-test',
+              description: 'Post-deploy smoke test failed — check Hub health',
+              target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`
+            })
