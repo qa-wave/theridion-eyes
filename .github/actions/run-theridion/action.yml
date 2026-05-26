@@ -1,0 +1,49 @@
+name: Run Theridion tests
+description: Run a Theridion collection in CI and emit report artifacts.
+
+inputs:
+  collection:
+    description: Path to the Theridion collection JSON file.
+    required: true
+  environment:
+    description: Optional path to a Theridion environment JSON file.
+    required: false
+    default: ""
+  report:
+    description: Output path for the HTML trace report.
+    required: false
+    default: theridion-report.html
+  working-directory:
+    description: Repository directory containing the sidecar package.
+    required: false
+    default: apps/sidecar
+
+outputs:
+  report:
+    description: Path to the generated HTML report.
+    value: ${{ inputs.report }}
+
+runs:
+  using: composite
+  steps:
+    - name: Install uv
+      uses: astral-sh/setup-uv@v6
+
+    - name: Run collection
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        set -euo pipefail
+        collection="${{ inputs.collection }}"
+        if [[ "$collection" != /* ]]; then
+          collection="${{ github.workspace }}/$collection"
+        fi
+        args=("$collection" "--report" "${{ github.workspace }}/${{ inputs.report }}")
+        if [[ -n "${{ inputs.environment }}" ]]; then
+          environment="${{ inputs.environment }}"
+          if [[ "$environment" != /* ]]; then
+            environment="${{ github.workspace }}/$environment"
+          fi
+          args+=("--env" "$environment")
+        fi
+        uv run theridion test "${args[@]}"
