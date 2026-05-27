@@ -1,0 +1,30 @@
+[package]
+name = "theridion-fe"
+version = "0.0.1"
+description = "Theridion FE — frontend automation desktop app"
+authors = ["Tomáš Mertin <tomas.mertin@gmail.com>"]
+edition = "2021"
+rust-version = "1.77"
+
+[lib]
+name = "theridion_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-shell = "2"
+tauri-plugin-log = "2"
+log = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+notify = "6"
+dirs = "5"
+
+[features]
+custom-protocol = ["tauri/custom-protocol"]
+
+[dev-dependencies]
+tempfile = "3.27.0"

@@ -1,0 +1,272 @@
+# Instructions
+
+- Following Playwright test failed.
+- Explain why, be concise, respect Playwright best practices.
+- Provide a snippet of code with the fix, if possible.
+
+# Test info
+
+- Name: environments.spec.ts >> environments >> seeded env appears in the dropdown and selecting it sticks
+- Location: tests/e2e/environments.spec.ts:16:3
+
+# Error details
+
+```
+Error: expect(locator).toBeVisible() failed
+
+Locator: getByRole('button', { name: /Production/ })
+Expected: visible
+Error: strict mode violation: getByRole('button', { name: /Production/ }) resolved to 2 elements:
+    1) <button type="button" title="Active environment: Production" class="inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-[11px] transition border-cobweb-700/40 bg-cobweb-950/30 text-cobweb-300 hover:border-cobweb-600/50">…</button> aka getByTitle('Active environment: Production')
+    2) <button type="button" title="Environment: Production" class="stat-card !rounded-lg !px-2.5 !py-1 inline-flex items-center gap-1.5 text-neutral-400 transition hover:!bg-white/[0.05] hover:text-neutral-200">…</button> aka getByTitle('Environment: Production', { exact: true })
+
+Call log:
+  - Expect "toBeVisible" with timeout 5000ms
+  - waiting for getByRole('button', { name: /Production/ })
+
+```
+
+# Page snapshot
+
+```yaml
+- generic [ref=e3]:
+  - generic [ref=e5]:
+    - button [ref=e7] [cursor=pointer]:
+      - img [ref=e8]
+    - button [ref=e11] [cursor=pointer]:
+      - img [ref=e12]
+    - button [ref=e17] [cursor=pointer]:
+      - img [ref=e18]
+    - button [ref=e25] [cursor=pointer]:
+      - img [ref=e26]
+  - complementary [ref=e29]:
+    - heading "Theridion" [level=1] [ref=e31]
+    - generic [ref=e32]:
+      - generic [ref=e33]: Collections
+      - button [ref=e35] [cursor=pointer]:
+        - img [ref=e36]
+      - button [ref=e42] [cursor=pointer]:
+        - img [ref=e43]
+      - button [ref=e47] [cursor=pointer]:
+        - img [ref=e48]
+      - button [ref=e50] [cursor=pointer]:
+        - img [ref=e51]
+    - generic [ref=e55]:
+      - img
+      - searchbox "Filter…" [ref=e56]
+    - generic [ref=e58]:
+      - generic [ref=e59]:
+        - button [ref=e60] [cursor=pointer]:
+          - img [ref=e61]
+        - img [ref=e63]
+        - button "API v1" [ref=e65] [cursor=pointer]
+        - generic [ref=e66]: "1"
+        - button "Rename" [ref=e67] [cursor=pointer]:
+          - img [ref=e68]
+        - button "New folder at root" [ref=e71] [cursor=pointer]:
+          - img [ref=e72]
+        - button "Run collection" [ref=e74] [cursor=pointer]:
+          - img [ref=e75]
+        - button "Export as cURL" [ref=e77] [cursor=pointer]:
+          - img [ref=e78]
+        - button "Export as Postman" [ref=e80] [cursor=pointer]:
+          - img [ref=e81]
+        - button "View Statistics" [ref=e84] [cursor=pointer]:
+          - img [ref=e85]
+        - button "Generate Docs" [ref=e87] [cursor=pointer]:
+          - img [ref=e88]
+        - button "Delete collection" [ref=e91] [cursor=pointer]:
+          - img [ref=e92]
+      - generic [ref=e96]:
+        - generic [ref=e97]:
+          - button [ref=e98] [cursor=pointer]:
+            - img [ref=e99]
+          - img [ref=e101]
+          - button "Repositories" [ref=e103] [cursor=pointer]
+          - generic [ref=e104]: "1"
+          - button "Rename" [ref=e105] [cursor=pointer]:
+            - img [ref=e106]
+          - button "New subfolder" [ref=e109] [cursor=pointer]:
+            - img [ref=e110]
+          - button "Delete folder" [ref=e112] [cursor=pointer]:
+            - img [ref=e113]
+        - generic [ref=e117]:
+          - button "GET List repos" [ref=e118] [cursor=pointer]:
+            - generic [ref=e119]: GET
+            - generic [ref=e120]: List repos
+          - button "Add to favorites" [ref=e121] [cursor=pointer]:
+            - img [ref=e122]
+          - button "Rename" [ref=e124] [cursor=pointer]:
+            - img [ref=e125]
+          - button "Delete request" [ref=e128] [cursor=pointer]:
+            - img [ref=e129]
+    - generic [ref=e132]:
+      - button "Collapse" [ref=e133] [cursor=pointer]:
+        - img [ref=e134]
+        - generic [ref=e136]: Collapse
+      - button "Shortcuts ⌘?" [ref=e137] [cursor=pointer]
+  - main [ref=e138]:
+    - generic [ref=e139]:
+      - button "GET Untitled Close tab" [ref=e141] [cursor=pointer]:
+        - generic [ref=e142]: GET
+        - generic [ref=e143]: Untitled
+        - button "Close tab" [ref=e144]:
+          - img [ref=e145]
+      - generic [ref=e148]:
+        - button "New request (Cmd+T)" [ref=e149] [cursor=pointer]:
+          - img [ref=e150]
+        - button "Cmd+K" [ref=e151] [cursor=pointer]:
+          - img [ref=e152]
+          - generic [ref=e154]: Cmd+K
+        - button "More" [ref=e156] [cursor=pointer]:
+          - img [ref=e157]
+          - generic [ref=e161]: More
+        - button "History" [ref=e162] [cursor=pointer]:
+          - img [ref=e163]
+          - generic [ref=e166]: History
+        - button "Production" [ref=e169] [cursor=pointer]:
+          - generic [ref=e171]: Production
+          - img [ref=e172]
+    - generic [ref=e176]:
+      - generic [ref=e177]:
+        - generic [ref=e179]:
+          - combobox [ref=e180]:
+            - option "GET" [selected]
+            - option "POST"
+            - option "PUT"
+            - option "PATCH"
+            - option "DELETE"
+            - option "HEAD"
+            - option "OPTIONS"
+          - generic: ▾
+        - textbox "https://api.example.com/v1/resource" [ref=e183]
+      - generic [ref=e184]:
+        - button "Save" [disabled] [ref=e185]:
+          - img [ref=e186]
+          - text: Save
+        - button "Save to\\u2026 (\\u2318\\u21E7S)" [disabled] [ref=e190]:
+          - img [ref=e191]
+      - button "cURL" [disabled] [ref=e193]:
+        - img [ref=e194]
+        - text: cURL
+      - button "Share" [disabled] [ref=e199]
+      - generic [ref=e201]:
+        - img
+        - combobox [ref=e202]:
+          - option "No environment"
+          - option "Production" [selected]
+        - generic: ▾
+      - button "Send" [disabled] [ref=e203]:
+        - img [ref=e204]
+        - text: Send
+    - generic [ref=e207]:
+      - generic [ref=e209]:
+        - generic [ref=e210]:
+          - button "Params" [ref=e211] [cursor=pointer]
+          - button "Headers" [ref=e212] [cursor=pointer]
+          - button "Body" [ref=e213] [cursor=pointer]
+          - button "Auth" [ref=e214] [cursor=pointer]
+          - button "Certs" [ref=e215] [cursor=pointer]
+          - button "Tests" [ref=e216] [cursor=pointer]
+          - button "Scripts" [ref=e217] [cursor=pointer]
+          - button "Retry" [ref=e218] [cursor=pointer]
+          - button "Notes" [ref=e219] [cursor=pointer]
+        - generic [ref=e221]:
+          - paragraph [ref=e222]: Query parameters
+          - table [ref=e224]:
+            - rowgroup [ref=e225]:
+              - row "Name Value" [ref=e226]:
+                - columnheader "Name" [ref=e227]
+                - columnheader "Value" [ref=e228]
+                - columnheader [ref=e229]
+            - rowgroup [ref=e230]:
+              - row "No query parameters" [ref=e231]:
+                - cell "No query parameters" [ref=e232]
+          - button "+ Add parameter" [ref=e233] [cursor=pointer]
+      - generic [ref=e238]:
+        - img [ref=e240]
+        - paragraph [ref=e243]: No response yet
+        - paragraph [ref=e244]: Hit Send or press ⌘⏎
+  - contentinfo [ref=e246]:
+    - button "sidecar v0.0.1 · 48s · 0m" [ref=e248] [cursor=pointer]:
+      - generic [ref=e252]: sidecar v0.0.1
+      - generic [ref=e253]: · 48s
+      - generic [ref=e254]: · 0m
+    - button "Production" [ref=e255] [cursor=pointer]:
+      - generic [ref=e257]: Production
+    - generic [ref=e258]:
+      - button "Network Console" [ref=e259] [cursor=pointer]:
+        - img [ref=e260]
+      - button "Settings" [ref=e262] [cursor=pointer]:
+        - img [ref=e263]
+      - generic [ref=e266]: v0.0.1
+```
+
+# Test source
+
+```ts
+  1  | import { test, expect } from "@playwright/test";
+  2  | import { TEST_SIDECAR_PORT } from "../../playwright.config";
+  3  | 
+  4  | const SIDECAR = `http://127.0.0.1:${TEST_SIDECAR_PORT}`;
+  5  | 
+  6  | test.describe("environments", () => {
+  7  |   test.beforeEach(async ({ request }) => {
+  8  |     const list = await request
+  9  |       .get(`${SIDECAR}/api/environments`)
+  10 |       .then((r) => r.json());
+  11 |     for (const e of list) {
+  12 |       await request.delete(`${SIDECAR}/api/environments/${e.id}`);
+  13 |     }
+  14 |   });
+  15 | 
+  16 |   test("seeded env appears in the dropdown and selecting it sticks", async ({
+  17 |     page,
+  18 |     request,
+  19 |   }) => {
+  20 |     await request.post(`${SIDECAR}/api/environments`, {
+  21 |       data: { name: "Production" },
+  22 |     });
+  23 | 
+  24 |     await page.goto("/");
+  25 |     await expect(page.getByText(/sidecar v\d/)).toBeVisible({ timeout: 10_000 });
+  26 | 
+  27 |     // Open env dropdown — it sits on the right of the tab bar.
+  28 |     await page.getByTitle("No environment", { exact: true }).click();
+  29 |     await expect(page.getByRole("menu")).toBeVisible();
+  30 |     await page.getByRole("menu").getByText("Production").click();
+  31 | 
+  32 |     // Chip now shows the selected env name.
+> 33 |     await expect(page.getByRole("button", { name: /Production/ })).toBeVisible();
+     |                                                                    ^ Error: expect(locator).toBeVisible() failed
+  34 |   });
+  35 | 
+  36 |   test("variables CRUD round-trips through the API", async ({ request }) => {
+  37 |     // The full {{var}} substitution path is exhaustively covered by the
+  38 |     // sidecar's pytest suite with mocked httpx; here we just smoke-test
+  39 |     // the public CRUD that the modal drives.
+  40 |     const env = await request
+  41 |       .post(`${SIDECAR}/api/environments`, { data: { name: "T" } })
+  42 |       .then((r) => r.json());
+  43 |     await request.put(`${SIDECAR}/api/environments/${env.id}/variables`, {
+  44 |       data: {
+  45 |         variables: [
+  46 |           { name: "host", value: "api.example.com", enabled: true },
+  47 |           { name: "tok", value: "secret", enabled: false },
+  48 |         ],
+  49 |       },
+  50 |     });
+  51 |     const reread = await request
+  52 |       .get(`${SIDECAR}/api/environments/${env.id}`)
+  53 |       .then((r) => r.json());
+  54 |     expect(reread.variables).toHaveLength(2);
+  55 |     expect(reread.variables[0]).toMatchObject({
+  56 |       name: "host",
+  57 |       value: "api.example.com",
+  58 |       enabled: true,
+  59 |     });
+  60 |     expect(reread.variables[1].enabled).toBe(false);
+  61 |   });
+  62 | });
+  63 | 
+```

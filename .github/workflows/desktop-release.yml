@@ -1,0 +1,288 @@
+# Theridion desktop release pipeline
+#
+# Tag-triggered (v0.x.y) build × sign × upload for 2 Tauri apps × 3 OS = 6 artifacts.
+#
+# Apps:
+#   studio     apps/studio    Theridion BE (REST/GraphQL/gRPC/SOAP/Kafka/JMS/JDBC/MQTT)
+#   studio-fe  apps/studio-fe Theridion FE (Playwright multi-browser)
+#
+# Required secrets (all optional — missing = unsigned artifact):
+#   APPLE_CERTIFICATE, APPLE_CERTIFICATE_PASSWORD, APPLE_SIGNING_IDENTITY,
+#   APPLE_ID, APPLE_PASSWORD, APPLE_TEAM_ID  — macOS code signing + notarization
+#   WINDOWS_CERTIFICATE_PFX_BASE64, WINDOWS_CERTIFICATE_PASSWORD — Windows signing
+#   TAURI_SIGNING_PRIVATE_KEY, TAURI_SIGNING_PRIVATE_KEY_PASSWORD — Tauri updater
+#
+# Target build time: <20 min per OS with warm cache.
+name: Desktop Release
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+      - "v[0-9]+.[0-9]+.[0-9]+-*"
+
+permissions:
+  contents: write
+  id-token: write
+
+concurrency:
+  group: desktop-release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  RUST_BACKTRACE: 1
+
+jobs:
+  gate:
+    name: gate (CI tests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux system deps
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y --no-install-recommends \
+            libxmlsec1-dev libxmlsec1-openssl \
+            libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev \
+            patchelf
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+          cache-dependency-glob: "**/uv.lock"
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Sidecar (BE) pytest
+        working-directory: apps/sidecar
+        run: uv sync --frozen && uv run pytest -q --tb=short
+
+      - name: Sidecar (FE) pytest
+        working-directory: apps/sidecar-fe
+        run: uv sync && uv run pytest -q --tb=short
+        continue-on-error: true  # FE sidecar tests are subset of BE; not blocking
+
+      - name: Studio BE typecheck
+        working-directory: apps/studio
+        run: pnpm install --frozen-lockfile && pnpm typecheck
+
+      - name: Studio FE typecheck
+        working-directory: apps/studio-fe
+        run: pnpm install --frozen-lockfile && pnpm typecheck
+
+  create-release:
+    name: release (draft)
+    needs: gate
+    runs-on: ubuntu-latest
+    outputs:
+      release-id: ${{ steps.create.outputs.result }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          PREV=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          if [[ -n "$PREV" ]]; then
+            BODY=$(git log --pretty=format:"- %s (%h)" "${PREV}..HEAD" | head -50)
+          else
+            BODY=$(git log --pretty=format:"- %s (%h)" | head -50)
+          fi
+          {
+            echo "CHANGELOG<<EOF"
+            echo "$BODY"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release (draft)
+        id: create
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data } = await github.rest.repos.createRelease({
+              owner: context.repo.owner,
+              repo:  context.repo.repo,
+              tag_name:   context.ref.replace('refs/tags/', ''),
+              name:       `Theridion ${context.ref.replace('refs/tags/', '')}`,
+              body:       `## Changes\n\n${{ steps.changelog.outputs.CHANGELOG }}\n\n` +
+                          `## Downloads\n\n` +
+                          `**Theridion BE** — backend & integration testing\n` +
+                          `**Theridion FE** — frontend automation (Playwright)\n\n` +
+                          `Pick the installer for your platform from the assets below.`,
+              draft:      true,
+              prerelease: context.ref.includes('-'),
+            });
+            return data.id;
+
+  build:
+    name: build ${{ matrix.app }} / ${{ matrix.platform }}
+    needs: create-release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # ── Theridion BE (apps/studio + apps/sidecar) ───────────────────
+          - app: studio
+            sidecar_path: apps/sidecar
+            studio_path: apps/studio
+            os: macos-latest
+            target: aarch64-apple-darwin
+            platform: macos-arm64
+          - app: studio
+            sidecar_path: apps/sidecar
+            studio_path: apps/studio
+            os: macos-13
+            target: x86_64-apple-darwin
+            platform: macos-x64
+          - app: studio
+            sidecar_path: apps/sidecar
+            studio_path: apps/studio
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            platform: linux-x64
+          - app: studio
+            sidecar_path: apps/sidecar
+            studio_path: apps/studio
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            platform: windows-x64
+
+          # ── Theridion FE (apps/studio-fe + apps/sidecar-fe) ─────────────
+          - app: studio-fe
+            sidecar_path: apps/sidecar-fe
+            studio_path: apps/studio-fe
+            os: macos-latest
+            target: aarch64-apple-darwin
+            platform: macos-arm64
+          - app: studio-fe
+            sidecar_path: apps/sidecar-fe
+            studio_path: apps/studio-fe
+            os: macos-13
+            target: x86_64-apple-darwin
+            platform: macos-x64
+          - app: studio-fe
+            sidecar_path: apps/sidecar-fe
+            studio_path: apps/studio-fe
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            platform: linux-x64
+          - app: studio-fe
+            sidecar_path: apps/sidecar-fe
+            studio_path: apps/studio-fe
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            platform: windows-x64
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+          cache-dependency-glob: "${{ matrix.sidecar_path }}/uv.lock"
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ${{ matrix.studio_path }}/src-tauri
+          key: ${{ matrix.app }}-${{ matrix.target }}
+          save-if: ${{ github.ref_type == 'tag' }}
+
+      - name: Install Linux system deps
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y --no-install-recommends \
+            libxmlsec1-dev libxmlsec1-openssl \
+            libwebkit2gtk-4.1-dev libappindicator3-dev \
+            librsvg2-dev patchelf
+
+      - name: Import Apple certificate
+        if: runner.os == 'macOS' && env.APPLE_CERTIFICATE != ''
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          echo "$APPLE_CERTIFICATE" | base64 --decode > /tmp/certificate.p12
+          security create-keychain -p "ci-keychain-pass" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "ci-keychain-pass" build.keychain
+          security import /tmp/certificate.p12 -k build.keychain \
+            -P "$APPLE_CERTIFICATE_PASSWORD" \
+            -T /usr/bin/codesign -T /usr/bin/productbuild
+          security set-key-partition-list \
+            -S apple-tool:,apple: -s -k "ci-keychain-pass" build.keychain
+          rm -f /tmp/certificate.p12
+          security set-keychain-settings -t 3600 -u build.keychain
+
+      - name: Install frontend deps
+        working-directory: ${{ matrix.studio_path }}
+        run: pnpm install --frozen-lockfile
+
+      - name: Build PyInstaller sidecar bundle
+        working-directory: ${{ matrix.sidecar_path }}
+        shell: bash
+        run: bash scripts/build-bundle.sh
+
+      - name: Build and release Tauri app
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY:          ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          APPLE_CERTIFICATE:          ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY:     ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID:                   ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD:             ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID:              ${{ secrets.APPLE_TEAM_ID }}
+          WINDOWS_CERTIFICATE:          ${{ secrets.WINDOWS_CERTIFICATE_PFX_BASE64 }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        with:
+          projectPath:  ${{ matrix.studio_path }}
+          releaseId:    ${{ needs.create-release.outputs.release-id }}
+          tagName:      ${{ github.ref_name }}
+          releaseName:  "Theridion ${{ github.ref_name }}"
+          releaseDraft: true
+          args:         --target ${{ matrix.target }}
+
+  publish:
+    name: release (publish)
+    needs: [create-release, build]
+    runs-on: ubuntu-latest
+    if: needs.build.result == 'success'
+    steps:
+      - name: Publish GitHub Release
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.repos.updateRelease({
+              owner:      context.repo.owner,
+              repo:       context.repo.repo,
+              release_id: ${{ needs.create-release.outputs.release-id }},
+              draft:      false,
+            });
+            console.log('Released: ${{ github.ref_name }}');

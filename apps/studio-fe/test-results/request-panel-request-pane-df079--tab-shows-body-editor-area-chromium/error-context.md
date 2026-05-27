@@ -1,0 +1,379 @@
+# Instructions
+
+- Following Playwright test failed.
+- Explain why, be concise, respect Playwright best practices.
+- Provide a snippet of code with the fix, if possible.
+
+# Test info
+
+- Name: request-panel.spec.ts >> request panel tabs >> Body tab >> shows body editor area
+- Location: tests/e2e/request-panel.spec.ts:98:5
+
+# Error details
+
+```
+Error: expect(locator).toBeVisible() failed
+
+Locator: getByText('JSON').or(getByText('Content-Type')).or(getByText('Body'))
+Expected: visible
+Error: strict mode violation: getByText('JSON').or(getByText('Content-Type')).or(getByText('Body')) resolved to 4 elements:
+    1) <button type="button" class="relative h-8 rounded-lg px-3 text-[11px] font-medium transition-all duration-150 bg-white/[0.08] text-neutral-100 shadow-sm">Body</button> aka getByRole('button', { name: 'Body' })
+    2) <p class="text-[11px] uppercase tracking-wider text-neutral-500">Body</p> aka getByRole('paragraph').filter({ hasText: /^Body$/ })
+    3) <button type="button" class="rounded border border-glass px-1.5 py-0.5 text-[10px] transition text-neutral-500 hover:bg-white/[0.06] hover:text-neutral-300">JSON</button> aka getByRole('button', { name: 'JSON' })
+    4) <p class="mt-3 text-[11px] leading-relaxed text-neutral-600">Add a JSON or XML request body. Switch to Form Da…</p> aka getByText('Add a JSON or XML request')
+
+Call log:
+  - Expect "toBeVisible" with timeout 5000ms
+  - waiting for getByText('JSON').or(getByText('Content-Type')).or(getByText('Body'))
+
+```
+
+# Page snapshot
+
+```yaml
+- generic [ref=e3]:
+  - generic [ref=e5]:
+    - button [ref=e7] [cursor=pointer]:
+      - img [ref=e8]
+    - button [ref=e11] [cursor=pointer]:
+      - img [ref=e12]
+    - button [ref=e17] [cursor=pointer]:
+      - img [ref=e18]
+    - button [ref=e25] [cursor=pointer]:
+      - img [ref=e26]
+  - complementary [ref=e29]:
+    - heading "Theridion" [level=1] [ref=e31]
+    - generic [ref=e32]:
+      - generic [ref=e33]:
+        - button [ref=e34] [cursor=pointer]:
+          - img [ref=e35]
+        - img [ref=e37]
+        - generic [ref=e39]: Favorites
+        - generic [ref=e40]: "1"
+      - button "GET List repos" [ref=e42] [cursor=pointer]:
+        - img [ref=e43]
+        - generic [ref=e45]: GET
+        - generic [ref=e46]: List repos
+    - generic [ref=e47]:
+      - generic [ref=e48]: Collections
+      - button [ref=e50] [cursor=pointer]:
+        - img [ref=e51]
+      - button [ref=e57] [cursor=pointer]:
+        - img [ref=e58]
+      - button [ref=e62] [cursor=pointer]:
+        - img [ref=e63]
+      - button [ref=e65] [cursor=pointer]:
+        - img [ref=e66]
+    - generic [ref=e70]:
+      - img
+      - searchbox "Filter…" [ref=e71]
+    - generic [ref=e73]:
+      - generic [ref=e74]:
+        - button [ref=e75] [cursor=pointer]:
+          - img [ref=e76]
+        - img [ref=e78]
+        - button "API v1" [ref=e80] [cursor=pointer]
+        - generic [ref=e81]: "1"
+        - button "Rename" [ref=e82] [cursor=pointer]:
+          - img [ref=e83]
+        - button "New folder at root" [ref=e86] [cursor=pointer]:
+          - img [ref=e87]
+        - button "Run collection" [ref=e89] [cursor=pointer]:
+          - img [ref=e90]
+        - button "Export as cURL" [ref=e92] [cursor=pointer]:
+          - img [ref=e93]
+        - button "Export as Postman" [ref=e95] [cursor=pointer]:
+          - img [ref=e96]
+        - button "View Statistics" [ref=e99] [cursor=pointer]:
+          - img [ref=e100]
+        - button "Generate Docs" [ref=e102] [cursor=pointer]:
+          - img [ref=e103]
+        - button "Delete collection" [ref=e106] [cursor=pointer]:
+          - img [ref=e107]
+      - generic [ref=e111]:
+        - generic [ref=e112]:
+          - button [ref=e113] [cursor=pointer]:
+            - img [ref=e114]
+          - img [ref=e116]
+          - button "Repositories" [ref=e118] [cursor=pointer]
+          - generic [ref=e119]: "1"
+          - button "Rename" [ref=e120] [cursor=pointer]:
+            - img [ref=e121]
+          - button "New subfolder" [ref=e124] [cursor=pointer]:
+            - img [ref=e125]
+          - button "Delete folder" [ref=e127] [cursor=pointer]:
+            - img [ref=e128]
+        - generic [ref=e132]:
+          - button "GET List repos" [ref=e133] [cursor=pointer]:
+            - generic [ref=e134]: GET
+            - generic [ref=e135]: List repos
+          - button "Remove from favorites" [ref=e136] [cursor=pointer]:
+            - img [ref=e137]
+          - button "Rename" [ref=e139] [cursor=pointer]:
+            - img [ref=e140]
+          - button "Delete request" [ref=e143] [cursor=pointer]:
+            - img [ref=e144]
+    - generic [ref=e147]:
+      - button "Collapse" [ref=e148] [cursor=pointer]:
+        - img [ref=e149]
+        - generic [ref=e151]: Collapse
+      - button "Shortcuts ⌘?" [ref=e152] [cursor=pointer]
+  - main [ref=e153]:
+    - generic [ref=e154]:
+      - button "GET Untitled Close tab" [ref=e156] [cursor=pointer]:
+        - generic [ref=e157]: GET
+        - generic [ref=e158]: Untitled
+        - button "Close tab" [ref=e159]:
+          - img [ref=e160]
+      - generic [ref=e163]:
+        - button "New request (Cmd+T)" [ref=e164] [cursor=pointer]:
+          - img [ref=e165]
+        - button "Cmd+K" [ref=e166] [cursor=pointer]:
+          - img [ref=e167]
+          - generic [ref=e169]: Cmd+K
+        - button "More" [ref=e171] [cursor=pointer]:
+          - img [ref=e172]
+          - generic [ref=e176]: More
+        - button "History" [ref=e177] [cursor=pointer]:
+          - img [ref=e178]
+          - generic [ref=e181]: History
+        - button "No env" [ref=e184] [cursor=pointer]:
+          - img [ref=e185]
+          - generic [ref=e189]: No env
+          - img [ref=e190]
+    - generic [ref=e194]:
+      - generic [ref=e195]:
+        - generic [ref=e197]:
+          - combobox [ref=e198]:
+            - option "GET" [selected]
+            - option "POST"
+            - option "PUT"
+            - option "PATCH"
+            - option "DELETE"
+            - option "HEAD"
+            - option "OPTIONS"
+          - generic: ▾
+        - textbox "https://api.example.com/v1/resource" [ref=e201]
+      - generic [ref=e202]:
+        - button "Save" [disabled] [ref=e203]:
+          - img [ref=e204]
+          - text: Save
+        - button "Save to\\u2026 (\\u2318\\u21E7S)" [disabled] [ref=e208]:
+          - img [ref=e209]
+      - button "cURL" [disabled] [ref=e211]:
+        - img [ref=e212]
+        - text: cURL
+      - button "Share" [disabled] [ref=e217]
+      - generic [ref=e219]:
+        - img
+        - combobox [ref=e220]:
+          - option "No environment" [selected]
+          - option "T"
+        - generic: ▾
+      - button "Send" [disabled] [ref=e221]:
+        - img [ref=e222]
+        - text: Send
+    - generic [ref=e225]:
+      - generic [ref=e227]:
+        - generic [ref=e228]:
+          - button "Params" [ref=e229] [cursor=pointer]
+          - button "Headers" [ref=e230] [cursor=pointer]
+          - button "Body" [ref=e231] [cursor=pointer]
+          - button "Auth" [ref=e232] [cursor=pointer]
+          - button "Certs" [ref=e233] [cursor=pointer]
+          - button "Tests" [ref=e234] [cursor=pointer]
+          - button "Scripts" [ref=e235] [cursor=pointer]
+          - button "Retry" [ref=e236] [cursor=pointer]
+          - button "Notes" [ref=e237] [cursor=pointer]
+        - generic [ref=e239]:
+          - generic [ref=e240]:
+            - paragraph [ref=e241]: Body
+            - generic [ref=e242]:
+              - button "Raw" [ref=e243] [cursor=pointer]
+              - button "Form Data" [ref=e244] [cursor=pointer]
+              - button "URL Encoded" [ref=e245] [cursor=pointer]
+          - generic [ref=e246]:
+            - button "JSON" [ref=e247] [cursor=pointer]
+            - button "XML" [ref=e248] [cursor=pointer]
+            - button "Text" [ref=e249] [cursor=pointer]
+            - button "HTML" [ref=e250] [cursor=pointer]
+            - button "YAML" [ref=e251] [cursor=pointer]
+            - button "GraphQL" [ref=e252] [cursor=pointer]
+            - button "Format" [ref=e254] [cursor=pointer]
+            - button "Minify" [ref=e255] [cursor=pointer]
+            - button "Snippets" [ref=e257] [cursor=pointer]:
+              - text: Snippets
+              - img [ref=e258]
+          - generic [ref=e264]: Loading editor…
+          - paragraph [ref=e265]: Add a JSON or XML request body. Switch to Form Data mode for key-value pairs.
+      - generic [ref=e270]:
+        - img [ref=e272]
+        - paragraph [ref=e275]: No response yet
+        - paragraph [ref=e276]: Hit Send or press ⌘⏎
+  - contentinfo [ref=e278]:
+    - button "sidecar v0.0.1 · 6m · 0m" [ref=e280] [cursor=pointer]:
+      - generic [ref=e284]: sidecar v0.0.1
+      - generic [ref=e285]: · 6m
+      - generic [ref=e286]: · 0m
+    - button "No env" [ref=e287] [cursor=pointer]:
+      - generic [ref=e288]: No env
+    - generic [ref=e289]:
+      - button "Network Console" [ref=e290] [cursor=pointer]:
+        - img [ref=e291]
+      - button "Settings" [ref=e293] [cursor=pointer]:
+        - img [ref=e294]
+      - generic [ref=e297]: v0.0.1
+```
+
+# Test source
+
+```ts
+  5   |     await page.goto("/");
+  6   |     await expect(page.getByText(/sidecar v\d/)).toBeVisible({ timeout: 10_000 });
+  7   |   });
+  8   | 
+  9   |   test.describe("Params tab", () => {
+  10  |     test("shows query parameters table", async ({ page }) => {
+  11  |       // Params tab is active by default
+  12  |       await expect(page.getByText("Query parameters", { exact: true })).toBeVisible();
+  13  |       await expect(page.getByText("No query parameters")).toBeVisible();
+  14  |     });
+  15  | 
+  16  |     test("adding a parameter updates the URL", async ({ page }) => {
+  17  |       // Click "+ Add parameter"
+  18  |       await page.getByText("+ Add parameter").click();
+  19  | 
+  20  |       // Fill in key and value
+  21  |       const nameInput = page.getByPlaceholder("name").first();
+  22  |       const valueInput = page.getByPlaceholder("value").first();
+  23  |       await nameInput.fill("page");
+  24  |       await valueInput.fill("1");
+  25  | 
+  26  |       // URL bar should now contain the query parameter
+  27  |       const urlInput = page.getByPlaceholder(/Enter URL/i).or(page.locator("input[type='text']").first());
+  28  |       await expect(urlInput).toHaveValue(/[?&]page=1/);
+  29  |     });
+  30  | 
+  31  |     test("adding multiple parameters builds correct query string", async ({
+  32  |       page,
+  33  |     }) => {
+  34  |       await page.getByText("+ Add parameter").click();
+  35  |       await page.getByPlaceholder("name").first().fill("page");
+  36  |       await page.getByPlaceholder("value").first().fill("1");
+  37  | 
+  38  |       await page.getByText("+ Add parameter").click();
+  39  |       await page.getByPlaceholder("name").nth(1).fill("limit");
+  40  |       await page.getByPlaceholder("value").nth(1).fill("20");
+  41  | 
+  42  |       const urlInput = page.getByPlaceholder(/Enter URL/i).or(page.locator("input[type='text']").first());
+  43  |       await expect(urlInput).toHaveValue(/page=1/);
+  44  |       await expect(urlInput).toHaveValue(/limit=20/);
+  45  |     });
+  46  | 
+  47  |     test("removing a parameter updates the URL", async ({ page }) => {
+  48  |       await page.getByText("+ Add parameter").click();
+  49  |       await page.getByPlaceholder("name").first().fill("key");
+  50  |       await page.getByPlaceholder("value").first().fill("val");
+  51  | 
+  52  |       // Remove the parameter
+  53  |       await page.getByTitle("Remove").first().click();
+  54  | 
+  55  |       await expect(page.getByText("No query parameters")).toBeVisible();
+  56  |     });
+  57  |   });
+  58  | 
+  59  |   test.describe("Headers tab", () => {
+  60  |     test("shows table mode by default", async ({ page }) => {
+  61  |       await page.keyboard.press("Alt+2");
+  62  | 
+  63  |       // Table mode button should be active
+  64  |       await expect(
+  65  |         page.getByRole("button", { name: /Table/i }),
+  66  |       ).toBeVisible();
+  67  |     });
+  68  | 
+  69  |     test("can switch between table and raw mode", async ({ page }) => {
+  70  |       await page.keyboard.press("Alt+2");
+  71  | 
+  72  |       // Switch to raw mode
+  73  |       await page.getByRole("button", { name: /Raw/i }).click();
+  74  | 
+  75  |       // Raw mode shows a code editor area (Monaco or textarea)
+  76  |       // Switch back to table
+  77  |       await page.getByRole("button", { name: /Table/i }).click();
+  78  |     });
+  79  | 
+  80  |     test("adding a header in table mode", async ({ page }) => {
+  81  |       await page.keyboard.press("Alt+2");
+  82  | 
+  83  |       // Click add header button
+  84  |       const addBtn = page.getByText("+ Add header").or(page.getByRole("button", { name: /Add/i }));
+  85  |       await addBtn.first().click();
+  86  | 
+  87  |       // Fill header name and value
+  88  |       const nameInputs = page.getByPlaceholder("name").or(page.getByPlaceholder("Header name"));
+  89  |       const valueInputs = page.getByPlaceholder("value").or(page.getByPlaceholder("Header value"));
+  90  |       await nameInputs.first().fill("X-Custom-Header");
+  91  |       await valueInputs.first().fill("custom-value");
+  92  | 
+  93  |       await expect(nameInputs.first()).toHaveValue("X-Custom-Header");
+  94  |     });
+  95  |   });
+  96  | 
+  97  |   test.describe("Body tab", () => {
+  98  |     test("shows body editor area", async ({ page }) => {
+  99  |       await page.keyboard.press("Alt+3");
+  100 | 
+  101 |       // Body tab should have content-type presets or editor
+  102 |       // Look for common content type buttons
+  103 |       await expect(
+  104 |         page.getByText("JSON").or(page.getByText("Content-Type")).or(page.getByText("Body")),
+> 105 |       ).toBeVisible();
+      |         ^ Error: expect(locator).toBeVisible() failed
+  106 |     });
+  107 | 
+  108 |     test("content-type preset buttons exist", async ({ page }) => {
+  109 |       await page.keyboard.press("Alt+3");
+  110 | 
+  111 |       // Common presets for body content type
+  112 |       await expect(
+  113 |         page
+  114 |           .getByRole("button", { name: /JSON/i })
+  115 |           .or(page.getByText("application/json")),
+  116 |       ).toBeVisible();
+  117 |     });
+  118 |   });
+  119 | 
+  120 |   test.describe("Notes tab", () => {
+  121 |     test("opens notes tab via Alt+7", async ({ page }) => {
+  122 |       await page.keyboard.press("Alt+7");
+  123 | 
+  124 |       // Notes tab should show a text area or editor for markdown
+  125 |       // Look for the notes content area
+  126 |       await expect(
+  127 |         page
+  128 |           .getByPlaceholder(/notes/i)
+  129 |           .or(page.getByPlaceholder(/markdown/i))
+  130 |           .or(page.getByText("Notes", { exact: true }))
+  131 |           .or(page.locator("[data-testid='notes-editor']"))
+  132 |           .or(page.locator("textarea")),
+  133 |       ).toBeVisible();
+  134 |     });
+  135 |   });
+  136 | 
+  137 |   test.describe("Tests tab", () => {
+  138 |     test("opens tests tab via Alt+5", async ({ page }) => {
+  139 |       await page.keyboard.press("Alt+5");
+  140 | 
+  141 |       // Tests tab should show assertion builder
+  142 |       await expect(
+  143 |         page
+  144 |           .getByText(/assertion/i)
+  145 |           .or(page.getByText("Add", { exact: true }))
+  146 |           .or(page.getByRole("button", { name: /Add/i })),
+  147 |       ).toBeVisible();
+  148 |     });
+  149 |   });
+  150 | });
+  151 | 
+```

@@ -1,0 +1,39 @@
+# Theridion sidecar — Fly.io config
+# Deploy: cd apps/sidecar && fly deploy
+
+app = "theridion-sidecar"
+primary_region = "fra"  # Frankfurt, same region as Vercel projects
+
+[build]
+
+[env]
+  PORT = "8765"
+  PYTHONUNBUFFERED = "1"
+
+[http_service]
+  internal_port = 8765
+  force_https = true
+  auto_stop_machines = "stop"        # zastaví po nečinnosti — šetří kredity
+  auto_start_machines = true         # spustí na první požadavek
+  min_machines_running = 0
+  processes = ["app"]
+
+  [http_service.concurrency]
+    type = "requests"
+    hard_limit = 200
+    soft_limit = 150
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"
+  cpus = 1
+
+[checks]
+  [checks.health]
+    grace_period = "10s"
+    interval = "30s"
+    method = "get"
+    path = "/health"
+    port = 8765
+    timeout = "5s"
+    type = "http"

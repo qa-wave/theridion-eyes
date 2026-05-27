@@ -1,0 +1,28 @@
+syntax = "proto3";
+
+package echo;
+
+service EchoService {
+    rpc SayHello (HelloRequest) returns (HelloReply);
+    rpc Ping (PingRequest) returns (PingReply);
+    rpc ServerStream (HelloRequest) returns (stream HelloReply);
+}
+
+message HelloRequest {
+    string name = 1;
+    int32 count = 2;
+}
+
+message HelloReply {
+    string message = 1;
+    bool ok = 2;
+}
+
+message PingRequest {
+    string payload = 1;
+}
+
+message PingReply {
+    string payload = 1;
+    double elapsed_ms = 2;
+}

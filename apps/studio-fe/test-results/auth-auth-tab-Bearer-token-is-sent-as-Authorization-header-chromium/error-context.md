@@ -1,0 +1,286 @@
+# Instructions
+
+- Following Playwright test failed.
+- Explain why, be concise, respect Playwright best practices.
+- Provide a snippet of code with the fix, if possible.
+
+# Test info
+
+- Name: auth.spec.ts >> auth tab >> Bearer token is sent as Authorization header
+- Location: tests/e2e/auth.spec.ts:113:3
+
+# Error details
+
+```
+Error: expect(locator).toBeVisible() failed
+
+Locator: getByText('200')
+Expected: visible
+Timeout: 10000ms
+Error: element(s) not found
+
+Call log:
+  - Expect "toBeVisible" with timeout 10000ms
+  - waiting for getByText('200')
+
+```
+
+# Page snapshot
+
+```yaml
+- generic [ref=e3]:
+  - generic [ref=e5]:
+    - button [ref=e7] [cursor=pointer]:
+      - img [ref=e8]
+    - button [ref=e11] [cursor=pointer]:
+      - img [ref=e12]
+    - button [ref=e17] [cursor=pointer]:
+      - img [ref=e18]
+    - button [ref=e25] [cursor=pointer]:
+      - img [ref=e26]
+  - complementary [ref=e29]:
+    - heading "Theridion" [level=1] [ref=e31]
+    - generic [ref=e32]:
+      - generic [ref=e33]: Collections
+      - button [ref=e35] [cursor=pointer]:
+        - img [ref=e36]
+      - button [ref=e42] [cursor=pointer]:
+        - img [ref=e43]
+      - button [ref=e47] [cursor=pointer]:
+        - img [ref=e48]
+      - button [ref=e50] [cursor=pointer]:
+        - img [ref=e51]
+    - generic [ref=e55]:
+      - img
+      - searchbox "Filter…" [ref=e56]
+    - generic [ref=e58]:
+      - img [ref=e60]
+      - paragraph [ref=e62]: No collections yet
+      - paragraph [ref=e63]: Create your first collection to organize and save API requests.
+      - paragraph [ref=e64]: Or save a request with ⌘S
+      - button "+ New collection" [ref=e65] [cursor=pointer]
+    - generic [ref=e66]:
+      - button "Collapse" [ref=e67] [cursor=pointer]:
+        - img [ref=e68]
+        - generic [ref=e70]: Collapse
+      - button "Shortcuts ⌘?" [ref=e71] [cursor=pointer]
+  - main [ref=e72]:
+    - generic [ref=e73]:
+      - button "GET Untitled unsaved Close tab" [ref=e75] [cursor=pointer]:
+        - generic [ref=e76]: GET
+        - generic [ref=e77]: Untitled
+        - generic "unsaved" [ref=e78]
+        - button "Close tab" [ref=e79]:
+          - img [ref=e80]
+      - generic [ref=e83]:
+        - button "New request (Cmd+T)" [ref=e84] [cursor=pointer]:
+          - img [ref=e85]
+        - button "Cmd+K" [ref=e86] [cursor=pointer]:
+          - img [ref=e87]
+          - generic [ref=e89]: Cmd+K
+        - button "More" [ref=e91] [cursor=pointer]:
+          - img [ref=e92]
+          - generic [ref=e96]: More
+        - button "History" [ref=e97] [cursor=pointer]:
+          - img [ref=e98]
+          - generic [ref=e101]: History
+        - button "No env" [ref=e104] [cursor=pointer]:
+          - img [ref=e105]
+          - generic [ref=e109]: No env
+          - img [ref=e110]
+    - generic [ref=e114]:
+      - generic [ref=e115]:
+        - generic [ref=e117]:
+          - combobox [ref=e118]:
+            - option "GET" [selected]
+            - option "POST"
+            - option "PUT"
+            - option "PATCH"
+            - option "DELETE"
+            - option "HEAD"
+            - option "OPTIONS"
+          - generic: ▾
+        - textbox "https://api.example.com/v1/resource" [ref=e121]
+      - generic [ref=e122]:
+        - button "Save" [disabled] [ref=e123]:
+          - img [ref=e124]
+          - text: Save
+        - button "Save to\\u2026 (\\u2318\\u21E7S)" [disabled] [ref=e128]:
+          - img [ref=e129]
+      - button "cURL" [disabled] [ref=e131]:
+        - img [ref=e132]
+        - text: cURL
+      - button "Share" [disabled] [ref=e137]
+      - button "Send" [disabled] [ref=e138]:
+        - img [ref=e139]
+        - text: Send
+    - generic [ref=e142]:
+      - generic [ref=e144]:
+        - generic [ref=e145]:
+          - button "Params" [ref=e146] [cursor=pointer]
+          - button "Headers" [ref=e147] [cursor=pointer]
+          - button "Body" [ref=e148] [cursor=pointer]
+          - button "Auth" [ref=e149] [cursor=pointer]: Auth
+          - button "Certs" [ref=e151] [cursor=pointer]
+          - button "Tests" [ref=e152] [cursor=pointer]
+          - button "Scripts" [ref=e153] [cursor=pointer]
+          - button "Retry" [ref=e154] [cursor=pointer]
+          - button "Notes" [ref=e155] [cursor=pointer]
+        - generic [ref=e157]:
+          - generic [ref=e158]:
+            - paragraph [ref=e159]: Type
+            - combobox [ref=e160]:
+              - option "No Auth"
+              - option "Bearer Token" [selected]
+              - option "Basic Auth"
+              - option "API Key"
+          - generic [ref=e161]:
+            - generic [ref=e162]: Token
+            - 'textbox "{{token}}" [active] [ref=e163]': http://127.0.0.1:8766/api/health
+      - generic [ref=e167]:
+        - img [ref=e169]
+        - heading "Welcome to Theridion" [level=2] [ref=e171]
+        - paragraph [ref=e172]: The privacy-first API testing tool
+        - paragraph [ref=e174]: 1.Enter a URL above and hit Send
+        - paragraph [ref=e175]: "Or get started with:"
+        - generic [ref=e176]:
+          - button "Import from Postman/Insomnia Import from Postman, Insomnia, or any cURL" [ref=e177] [cursor=pointer]:
+            - img [ref=e178]
+            - generic [ref=e181]: Import from Postman/Insomnia
+            - generic [ref=e182]: Import from Postman, Insomnia, or any cURL
+          - button "Load OpenAPI/Swagger Spec" [ref=e183] [cursor=pointer]:
+            - img [ref=e184]
+            - generic [ref=e189]: Load OpenAPI/Swagger Spec
+          - 'button "AI: Explore an API" [ref=e190] [cursor=pointer]':
+            - img [ref=e191]
+            - generic [ref=e194]: "AI: Explore an API"
+          - button "New Collection" [ref=e195] [cursor=pointer]:
+            - img [ref=e196]
+            - generic [ref=e198]: New Collection
+        - generic [ref=e199]:
+          - paragraph [ref=e200]: ⌘T new tab · ⌘K commands
+          - paragraph [ref=e201]: ⌘, settings · ⌘⇧N network
+  - contentinfo [ref=e203]:
+    - button "sidecar v0.0.1 · 42s · 0m" [ref=e205] [cursor=pointer]:
+      - generic [ref=e209]: sidecar v0.0.1
+      - generic [ref=e210]: · 42s
+      - generic [ref=e211]: · 0m
+    - button "No env" [ref=e212] [cursor=pointer]:
+      - generic [ref=e213]: No env
+    - generic [ref=e214]:
+      - button "Network Console" [ref=e215] [cursor=pointer]:
+        - img [ref=e216]
+      - button "Settings" [ref=e218] [cursor=pointer]:
+        - img [ref=e219]
+      - generic [ref=e222]: v0.0.1
+```
+
+# Test source
+
+```ts
+  28  |   });
+  29  | 
+  30  |   test("selecting Bearer Token shows token input", async ({ page }) => {
+  31  |     await page.keyboard.press("Alt+4");
+  32  | 
+  33  |     const select = page.getByTestId("auth-type-select");
+  34  |     await select.selectOption("bearer");
+  35  | 
+  36  |     // Token input should appear
+  37  |     await expect(page.getByText("Token", { exact: true })).toBeVisible();
+  38  |     const tokenInput = page.getByPlaceholder("{{token}}");
+  39  |     await expect(tokenInput).toBeVisible();
+  40  |   });
+  41  | 
+  42  |   test("entering Bearer token value persists in field", async ({ page }) => {
+  43  |     await page.keyboard.press("Alt+4");
+  44  | 
+  45  |     const select = page.getByTestId("auth-type-select");
+  46  |     await select.selectOption("bearer");
+  47  | 
+  48  |     const tokenInput = page.getByPlaceholder("{{token}}");
+  49  |     await tokenInput.fill("my-secret-token-123");
+  50  |     await expect(tokenInput).toHaveValue("my-secret-token-123");
+  51  |   });
+  52  | 
+  53  |   test("selecting Basic Auth shows username and password fields", async ({
+  54  |     page,
+  55  |   }) => {
+  56  |     await page.keyboard.press("Alt+4");
+  57  | 
+  58  |     const select = page.getByTestId("auth-type-select");
+  59  |     await select.selectOption("basic");
+  60  | 
+  61  |     await expect(page.getByText("Username", { exact: true })).toBeVisible();
+  62  |     await expect(page.getByText("Password", { exact: true })).toBeVisible();
+  63  |     await expect(page.getByPlaceholder("{{username}}")).toBeVisible();
+  64  |     await expect(page.getByPlaceholder("{{password}}")).toBeVisible();
+  65  |   });
+  66  | 
+  67  |   test("entering Basic Auth credentials persists", async ({ page }) => {
+  68  |     await page.keyboard.press("Alt+4");
+  69  | 
+  70  |     const select = page.getByTestId("auth-type-select");
+  71  |     await select.selectOption("basic");
+  72  | 
+  73  |     const usernameInput = page.getByPlaceholder("{{username}}");
+  74  |     const passwordInput = page.getByPlaceholder("{{password}}");
+  75  | 
+  76  |     await usernameInput.fill("testuser");
+  77  |     await passwordInput.fill("testpass");
+  78  | 
+  79  |     await expect(usernameInput).toHaveValue("testuser");
+  80  |     await expect(passwordInput).toHaveValue("testpass");
+  81  |   });
+  82  | 
+  83  |   test("selecting API Key shows key and value fields", async ({ page }) => {
+  84  |     await page.keyboard.press("Alt+4");
+  85  | 
+  86  |     const select = page.getByTestId("auth-type-select");
+  87  |     await select.selectOption("apikey");
+  88  | 
+  89  |     await expect(page.getByText("Key", { exact: true })).toBeVisible();
+  90  |     // The key placeholder for header name
+  91  |     await expect(page.getByPlaceholder("X-API-Key")).toBeVisible();
+  92  |   });
+  93  | 
+  94  |   test("auth type badge appears in tab bar when auth is configured", async ({
+  95  |     page,
+  96  |   }) => {
+  97  |     await page.keyboard.press("Alt+4");
+  98  | 
+  99  |     const select = page.getByTestId("auth-type-select");
+  100 |     await select.selectOption("bearer");
+  101 | 
+  102 |     const tokenInput = page.getByPlaceholder("{{token}}");
+  103 |     await tokenInput.fill("some-token");
+  104 | 
+  105 |     // The Auth tab button should have a dot indicator (badge) when type is not "none"
+  106 |     // We verify by checking the tab shows Auth is active (dot indicator)
+  107 |     const authTab = page.getByRole("button", { name: "Auth" });
+  108 |     await expect(authTab).toBeVisible();
+  109 |     // The badge dot is rendered inside the Auth tab button
+  110 |     await expect(authTab.locator("span.bg-cobweb-500")).toBeVisible();
+  111 |   });
+  112 | 
+  113 |   test("Bearer token is sent as Authorization header", async ({ page }) => {
+  114 |     // Set up auth
+  115 |     await page.keyboard.press("Alt+4");
+  116 |     const select = page.getByTestId("auth-type-select");
+  117 |     await select.selectOption("bearer");
+  118 |     await page.getByPlaceholder("{{token}}").fill("test-bearer-token");
+  119 | 
+  120 |     // Enter a URL to the sidecar diagnostics (which echoes back request info)
+  121 |     const urlInput = page.getByPlaceholder(/Enter URL/i).or(page.locator("input[type='text']").first());
+  122 |     await urlInput.fill(`${SIDECAR}/api/health`);
+  123 | 
+  124 |     // Send the request
+  125 |     await page.keyboard.press("Meta+Enter");
+  126 | 
+  127 |     // Wait for response
+> 128 |     await expect(page.getByText("200")).toBeVisible({ timeout: 10_000 });
+      |                                         ^ Error: expect(locator).toBeVisible() failed
+  129 |   });
+  130 | });
+  131 | 
+```
