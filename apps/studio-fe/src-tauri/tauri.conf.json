@@ -38,8 +38,8 @@
     ],
     "externalBin": ["binaries/theridion-sidecar-fe"],
     "category": "DeveloperTool",
-    "shortDescription": "Frontend automation — Theridion FE",
-    "longDescription": "Theridion FE — frontend automation desktop app. Playwright multi-browser (Chromium, Firefox, WebKit), visual regression, accessibility audit (axe-core), network interception. Code authoring + run history in one file-based workspace.",
+    "shortDescription": "Frontend automation — multi-framework + recorder",
+    "longDescription": "Theridion FE — frontend automation desktop app with multi-framework support: Playwright (Chromium/Firefox/WebKit), Cypress, WebdriverIO, Selenium WebDriver. Built-in recorder (Playwright Codegen + selector picker). Visual regression baseline review, accessibility audit (axe-core), network interception, multi-browser run matrix.",
     "createUpdaterArtifacts": true
   },
   "plugins": {

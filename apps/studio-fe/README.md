@@ -1,8 +1,31 @@
 # Theridion FE
 
-Frontend automation desktop app — Playwright multi-browser runner with visual regression,
-accessibility audit (axe-core), network interception, and run history. One file-based
-workspace, no cloud dependency.
+Frontend automation desktop app — multi-framework runner with built-in recorder, visual
+regression, accessibility audit (axe-core), network interception. One file-based workspace,
+no cloud dependency.
+
+## Supported frameworks
+
+| Framework | Recorder | Multi-browser | Status |
+|---|---|---|---|
+| **Playwright** | Codegen built-in | Chromium / Firefox / WebKit | GA |
+| **Cypress** | `cypress open` integration | Chromium-only | Beta |
+| **WebdriverIO** | Selenium-IDE replay | All Selenium browsers | Beta |
+| **Selenium WebDriver** | Selenium-IDE import | Chrome / Firefox / Edge / Safari | Beta |
+| **Puppeteer** | Playwright Codegen (compatible) | Chromium-only | Alpha |
+
+The framework selector at the top of every spec lets users switch implementations
+without rewriting tests — the Theridion runner adapter normalizes assertion DSL
+across all 5 backends.
+
+## Recorder
+
+Built-in Playwright Codegen wrapped in the Tauri shell:
+- **Selector picker** (hover-highlight, click-to-pick by role/aria/text/css)
+- **Action replay** while authoring (live preview)
+- **Test step inspector** — inspect locators + DOM snapshot per step
+- **Export** to any supported framework (Playwright TS, Cypress JS, WebdriverIO TS,
+  Selenium Python, raw browser DevTools `.devtoolsrecorder.json`)
 
 ## Architecture
 
