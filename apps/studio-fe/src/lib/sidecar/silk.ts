@@ -104,11 +104,39 @@ export interface SilkAutoSpecOutput {
   spec_code: string;
 }
 
+// ---- Frameworks ----
+
+export interface SilkFramework {
+  id: string;
+  label: string;
+  kind: "web" | "mobile";
+  file_extension: string;
+  codegen_target: string | null;
+  recordable: boolean;
+  runnable: boolean;
+  template: string;
+}
+
 // ---- Recording ----
 
 export interface SilkRecordStartInput {
   url: string;
   workspace_dir?: string;
+  /** Framework to use for codegen. Default: "playwright-ts". */
+  framework?: string;
+}
+
+// ---- Spec save ----
+
+export interface SilkSpecSaveInput {
+  framework: string;
+  filename: string;
+  code: string;
+  workspace_dir?: string;
+}
+
+export interface SilkSpecSaveOutput {
+  spec_path: string;
 }
 
 export interface SilkRecordStartOutput {
@@ -235,6 +263,19 @@ export const silkMethods = {
    */
   silkAutoSpec(input: SilkAutoSpecInput): Promise<SilkAutoSpecOutput> {
     return call<SilkAutoSpecOutput>("/api/silk/auto-spec", {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+  },
+
+  /** Fetch the list of supported test frameworks. */
+  silkFrameworks(): Promise<{ frameworks: SilkFramework[] }> {
+    return call<{ frameworks: SilkFramework[] }>("/api/silk/frameworks");
+  },
+
+  /** Save a manually authored spec to disk. */
+  silkSpecSave(input: SilkSpecSaveInput): Promise<SilkSpecSaveOutput> {
+    return call<SilkSpecSaveOutput>("/api/silk/spec/save", {
       method: "POST",
       body: JSON.stringify(input),
     });

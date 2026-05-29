@@ -22,6 +22,7 @@ import {
   CheckCircle2,
   Clock,
   Download,
+  FileCode,
   Globe,
   History,
   Image,
@@ -35,10 +36,12 @@ import {
   XCircle,
 } from "lucide-react";
 import { EmptyState } from "./EmptyState";
+import { NewTestDialog } from "./NewTestDialog";
 import { sidecar } from "../lib/sidecar";
 import type {
   SilkA11yViolation,
   SilkBrowserRunResult,
+  SilkFramework,
   SilkRunHistoryEntry,
   SilkRunOutput,
 } from "../lib/sidecar/silk";
@@ -356,6 +359,29 @@ function RecordDialog({
   const esRef = useRef<EventSource | null>(null);
   const logRef = useRef<HTMLDivElement>(null);
 
+  // Framework selection
+  const [frameworks, setFrameworks] = useState<SilkFramework[]>([]);
+  const [loadingFrameworks, setLoadingFrameworks] = useState(true);
+  const [selectedFrameworkId, setSelectedFrameworkId] = useState<string>("playwright-ts");
+
+  useEffect(() => {
+    sidecar
+      .silkFrameworks()
+      .then(({ frameworks: fws }) => {
+        setFrameworks(fws);
+        // Pick first recordable framework as default (prefer playwright-ts)
+        const defaultFw =
+          fws.find((f) => f.id === "playwright-ts") ??
+          fws.find((f) => f.recordable) ??
+          fws[0];
+        if (defaultFw) setSelectedFrameworkId(defaultFw.id);
+      })
+      .catch(() => {
+        // Non-blocking — fall back to playwright-ts
+      })
+      .finally(() => setLoadingFrameworks(false));
+  }, []);
+
   useEffect(() => {
     logRef.current?.scrollTo({ top: logRef.current.scrollHeight, behavior: "smooth" });
   }, [liveLines]);
@@ -366,10 +392,13 @@ function RecordDialog({
     };
   }, []);
 
+  const selectedFramework = frameworks.find((f) => f.id === selectedFrameworkId) ?? null;
+  const canRecord = selectedFramework === null || selectedFramework.recordable;
+
   const handleStart = async () => {
     setError(null);
     try {
-      const res = await sidecar.silkRecordStart({ url });
+      const res = await sidecar.silkRecordStart({ url, framework: selectedFrameworkId });
       setSessionId(res.session_id);
       setLiveLines([res.message]);
     } catch (e: unknown) {
@@ -400,6 +429,40 @@ function RecordDialog({
 
         {!sessionId ? (
           <>
+            {/* Framework selector */}
+            <div className="flex flex-col gap-1">
+              <label className="text-xs text-neutral-500">Framework</label>
+              {loadingFrameworks ? (
+                <div className="flex items-center gap-1.5 text-xs text-neutral-500 h-7">
+                  <RefreshCw size={11} className="animate-spin" />
+                  Načítám…
+                </div>
+              ) : (
+                <select
+                  value={selectedFrameworkId}
+                  onChange={(e) => setSelectedFrameworkId(e.target.value)}
+                  className="rounded bg-neutral-950 border border-neutral-800 px-3 py-1.5 text-xs text-neutral-200 focus:outline-none focus:border-emerald-600 transition-colors"
+                >
+                  {frameworks.length === 0 ? (
+                    <option value="playwright-ts">Playwright (TypeScript)</option>
+                  ) : (
+                    frameworks.map((f) => (
+                      <option key={f.id} value={f.id}>
+                        {f.label}
+                      </option>
+                    ))
+                  )}
+                </select>
+              )}
+              {/* Non-recordable hint */}
+              {!canRecord && selectedFramework && (
+                <p className="text-[10px] text-amber-400 mt-0.5">
+                  Nahrávání zatím není podporováno pro {selectedFramework.label} — použij{" "}
+                  <strong className="text-amber-300">Nový test (ruční tvorba)</strong>.
+                </p>
+              )}
+            </div>
+
             <div className="flex flex-col gap-1">
               <label className="text-xs text-neutral-500">Target URL</label>
               <input
@@ -415,9 +478,10 @@ function RecordDialog({
                 Cancel
               </button>
               <button
-                onClick={handleStart}
-                disabled={!url.trim()}
-                className="flex items-center gap-1.5 rounded px-3 py-1.5 text-xs font-medium bg-emerald-700 hover:bg-emerald-600 disabled:opacity-40 text-white"
+                onClick={() => void handleStart()}
+                disabled={!url.trim() || !canRecord}
+                className="flex items-center gap-1.5 rounded px-3 py-1.5 text-xs font-medium bg-emerald-700 hover:bg-emerald-600 disabled:opacity-40 disabled:cursor-not-allowed text-white"
+                title={!canRecord && selectedFramework ? `Nahrávání není podporováno pro ${selectedFramework.label}` : undefined}
               >
                 <Play size={11} />
                 Start recording
@@ -444,7 +508,7 @@ function RecordDialog({
                 Cancel
               </button>
               <button
-                onClick={handleStop}
+                onClick={() => void handleStop()}
                 disabled={stopping}
                 className="flex items-center gap-1.5 rounded px-3 py-1.5 text-xs font-medium bg-red-700 hover:bg-red-600 disabled:opacity-40 text-white"
               >
@@ -564,6 +628,7 @@ export function SilkPanel({ onToast }: SilkPanelProps) {
   const [browsersInstalled, setBrowsersInstalled] = useState<boolean | null>(null);
   const [showInstallDialog, setShowInstallDialog] = useState(false);
   const [showRecordDialog, setShowRecordDialog] = useState(false);
+  const [showNewTestDialog, setShowNewTestDialog] = useState(false);
   const [sessionRuns, setSessionRuns] = useState<SessionRun[]>([]);
   const [historyRuns, setHistoryRuns] = useState<SilkRunHistoryEntry[]>([]);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
@@ -667,6 +732,14 @@ export function SilkPanel({ onToast }: SilkPanelProps) {
     [onToast],
   );
 
+  const handleNewTestSaved = useCallback(
+    (specPath: string) => {
+      onToast?.("success", `Test uložen: ${specPath}`);
+      // Keep dialog open so user can see the saved path (dialog closes itself via "Zavřít")
+    },
+    [onToast],
+  );
+
   // Find selected run across session + history.
   const selectedSession = sessionRuns.find((r) => r.run.run_id === selectedRunId);
   const selectedRun = selectedSession?.run ?? null;
@@ -708,6 +781,12 @@ export function SilkPanel({ onToast }: SilkPanelProps) {
           onCancel={() => setShowRecordDialog(false)}
         />
       )}
+      {showNewTestDialog && (
+        <NewTestDialog
+          onSaved={handleNewTestSaved}
+          onCancel={() => setShowNewTestDialog(false)}
+        />
+      )}
 
       <div className="flex h-full flex-col bg-neutral-950 text-neutral-200">
         {/* Toolbar */}
@@ -721,6 +800,14 @@ export function SilkPanel({ onToast }: SilkPanelProps) {
             >
               <Video size={12} className="text-red-400" />
               Record
+            </button>
+            <button
+              onClick={() => setShowNewTestDialog(true)}
+              className="flex items-center gap-1.5 rounded px-2.5 py-1.5 text-xs font-medium bg-neutral-800 hover:bg-neutral-700 text-neutral-200 transition-colors"
+              title="Vytvoř nový test ručně v editoru"
+            >
+              <FileCode size={12} className="text-emerald-400" />
+              Nový test
             </button>
           </div>
 

@@ -202,6 +202,7 @@ export type {
   SilkBaselineSaveInput, SilkBaselineSaveOutput,
   SilkBaselineCompareInput, SilkBaselineCompareOutput,
   SilkRunHistoryEntry,
+  SilkFramework, SilkSpecSaveInput, SilkSpecSaveOutput,
 } from "./silk";
 
 export type {

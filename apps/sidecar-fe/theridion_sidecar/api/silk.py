@@ -2,6 +2,7 @@
 
 Endpoints
 ---------
+GET  /api/silk/frameworks                — List supported test frameworks
 GET  /api/silk/browsers/check            — Playwright Chromium presence check
 POST /api/silk/install-browsers          — SSE-stream Chromium install
 POST /api/silk/install-browsers/sync     — Blocking Chromium install
@@ -11,6 +12,7 @@ POST /api/silk/screenshot-diff           — Pixel-diff two PNG images
 POST /api/silk/auto-spec                 — Generate spec from a Strand failure
 POST /api/silk/record/start              — Start Playwright codegen session (SSE)
 POST /api/silk/record/stop               — Stop codegen, return spec text
+POST /api/silk/spec/save                 — Manually save a test spec (any framework)
 POST /api/silk/baseline/save             — Save screenshot as visual-regression baseline
 POST /api/silk/baseline/compare          — Diff current screenshot vs saved baseline
 GET  /api/silk/runs                      — Run history (last N)
@@ -40,6 +42,7 @@ from pydantic import BaseModel, Field
 
 from .. import storage
 from .. import silk_storage
+from . import silk_frameworks
 
 router = APIRouter(prefix="/api/silk", tags=["silk"])
 
@@ -51,6 +54,9 @@ _SILK_DIR_NAME = "silk"
 
 # Registry of active codegen subprocesses keyed by session_id
 _codegen_procs: dict[str, asyncio.subprocess.Process] = {}
+
+# Maps session_id → absolute path of the output file written by codegen
+_codegen_output_files: dict[str, Path] = {}
 
 
 async def shutdown_codegen_procs() -> None:
@@ -97,6 +103,18 @@ def _node_bin(name: str) -> str | None:
     return shutil.which(name)
 
 
+def _safe_path_under(base: Path, filename: str) -> Path:
+    """Resolve *base / filename* and raise ValueError if it escapes *base*.
+
+    This is the containment check used by spec/save to prevent path traversal.
+    """
+    resolved_base = base.resolve()
+    resolved_target = (base / filename).resolve()
+    if not str(resolved_target).startswith(str(resolved_base) + "/") and resolved_target != resolved_base:
+        raise ValueError(f"filename {filename!r} escapes the target directory")
+    return resolved_target
+
+
 def _monotonic_ns() -> int:
     import time as _time
     return _time.monotonic_ns()
@@ -105,6 +123,35 @@ def _monotonic_ns() -> int:
 # ---------------------------------------------------------------------------
 # Models
 # ---------------------------------------------------------------------------
+
+
+class FrameworkInfo(BaseModel):
+    id: str
+    label: str
+    kind: str
+    file_extension: str
+    codegen_target: str | None
+    recordable: bool
+    runnable: bool
+    template: str
+
+
+class FrameworksOutput(BaseModel):
+    frameworks: list[FrameworkInfo]
+
+
+class SpecSaveInput(BaseModel):
+    framework: str = Field(..., description="Framework id from /api/silk/frameworks.")
+    filename: str = Field(..., description="Filename for the spec (without or with extension).")
+    code: str = Field(..., description="Source code of the test spec.")
+    workspace_dir: str | None = Field(
+        None,
+        description="Target directory; defaults to ~/.theridion/silk/specs/ when omitted.",
+    )
+
+
+class SpecSaveOutput(BaseModel):
+    spec_path: str
 
 
 class InstallBrowsersResponse(BaseModel):
@@ -245,6 +292,10 @@ class BaselineCompareOutput(BaseModel):
 class RecordStartInput(BaseModel):
     url: str = Field(..., description="URL for Playwright codegen to open.")
     workspace_dir: str | None = None
+    framework: str = Field(
+        "playwright-ts",
+        description="Target framework for codegen output (must be recordable).",
+    )
 
 
 class RecordStartOutput(BaseModel):
@@ -276,6 +327,30 @@ class AutoSpecOutput(BaseModel):
 class BrowserCheckOutput(BaseModel):
     installed: bool
     paths: list[str]
+
+
+# ---------------------------------------------------------------------------
+# 0. Framework registry
+# ---------------------------------------------------------------------------
+
+
+@router.get("/frameworks", response_model=FrameworksOutput)
+def list_frameworks() -> FrameworksOutput:
+    """Return all supported test frameworks with their metadata."""
+    frameworks = [
+        FrameworkInfo(
+            id=fw.id,
+            label=fw.label,
+            kind=fw.kind,
+            file_extension=fw.file_extension,
+            codegen_target=fw.codegen_target,
+            recordable=fw.recordable,
+            runnable=fw.runnable,
+            template=fw.template,
+        )
+        for fw in silk_frameworks.all_frameworks()
+    ]
+    return FrameworksOutput(frameworks=frameworks)
 
 
 # ---------------------------------------------------------------------------
@@ -870,6 +945,15 @@ async def record_start(body: RecordStartInput) -> RecordStartOutput:
     if urlparse(body.url).scheme not in ("http", "https"):
         raise HTTPException(400, detail="record URL must use http or https scheme")
 
+    fw = silk_frameworks.get_framework(body.framework)
+    if fw is None:
+        raise HTTPException(400, detail=f"unknown framework: {body.framework}")
+    if not fw.recordable:
+        raise HTTPException(
+            400,
+            detail=f"recording not yet supported for {fw.label}; use manual authoring",
+        )
+
     npx = _node_bin("npx")
     if not npx:
         raise HTTPException(400, detail="npx not found — install Node.js 18+")
@@ -877,7 +961,7 @@ async def record_start(body: RecordStartInput) -> RecordStartOutput:
     session_id = uuid.uuid4().hex
     output_dir = _silk_dir() / "codegen" / session_id
     output_dir.mkdir(parents=True, exist_ok=True)
-    output_file = output_dir / "spec.ts"
+    output_file = output_dir / f"spec{fw.file_extension}"
 
     env = {**os.environ}
     cwd = body.workspace_dir or str(output_dir)
@@ -886,7 +970,7 @@ async def record_start(body: RecordStartInput) -> RecordStartOutput:
         npx,
         "playwright",
         "codegen",
-        "--target=playwright-test",
+        f"--target={fw.codegen_target}",
         f"--output={output_file}",
         body.url,
         stdout=asyncio.subprocess.PIPE,
@@ -896,6 +980,7 @@ async def record_start(body: RecordStartInput) -> RecordStartOutput:
     )
 
     _codegen_procs[session_id] = proc
+    _codegen_output_files[session_id] = output_file
 
     return RecordStartOutput(
         session_id=session_id,
@@ -950,7 +1035,11 @@ async def record_stop(body: dict) -> RecordStopOutput:
         except Exception:
             pass
 
-    output_file = _silk_dir() / "codegen" / session_id / "spec.ts"
+    # Use the output file path recorded at start time; fall back to legacy spec.ts for
+    # sessions that were started before _codegen_output_files tracking was introduced.
+    output_file = _codegen_output_files.pop(session_id, None) or (
+        _silk_dir() / "codegen" / session_id / "spec.ts"
+    )
     spec_text = ""
     spec_path_str: str | None = None
 
@@ -966,7 +1055,55 @@ async def record_stop(body: dict) -> RecordStopOutput:
 
 
 # ---------------------------------------------------------------------------
-# 8. Visual regression — baseline management
+# 8. Manual spec save (any framework)
+# ---------------------------------------------------------------------------
+
+
+@router.post("/spec/save", response_model=SpecSaveOutput)
+def spec_save(body: SpecSaveInput) -> SpecSaveOutput:
+    """Save a manually authored test spec to disk.
+
+    The file is written to *workspace_dir* when provided, otherwise to
+    ``~/.theridion/silk/specs/``.  The filename must not contain path-traversal
+    sequences; the framework's file extension is appended when missing.
+    """
+    fw = silk_frameworks.get_framework(body.framework)
+    if fw is None:
+        raise HTTPException(400, detail=f"unknown framework: {body.framework}")
+
+    # Sanitise filename — reject empty, traversal, and absolute paths.
+    fn = body.filename
+    if not fn or "/" in fn or "\\" in fn or ".." in fn:
+        raise HTTPException(
+            400,
+            detail="filename must not be empty, contain '/', '\\\\', or '..'",
+        )
+
+    # Append framework extension when missing.
+    if not fn.endswith(fw.file_extension):
+        fn = fn + fw.file_extension
+
+    # Resolve target directory.
+    if body.workspace_dir:
+        target_base = Path(body.workspace_dir)
+    else:
+        target_base = _silk_dir() / "specs"
+        target_base.mkdir(parents=True, exist_ok=True)
+
+    # Containment check — prevent escaping the base directory.
+    try:
+        dest = _safe_path_under(target_base, fn)
+    except ValueError as exc:
+        raise HTTPException(400, detail=str(exc)) from exc
+
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(body.code, encoding="utf-8")
+
+    return SpecSaveOutput(spec_path=str(dest))
+
+
+# ---------------------------------------------------------------------------
+# 9. Visual regression — baseline management
 # ---------------------------------------------------------------------------
 
 
@@ -1074,7 +1211,7 @@ def baseline_compare(body: BaselineCompareInput) -> BaselineCompareOutput:
 
 
 # ---------------------------------------------------------------------------
-# 9. Run history
+# 10. Run history
 # ---------------------------------------------------------------------------
 
 

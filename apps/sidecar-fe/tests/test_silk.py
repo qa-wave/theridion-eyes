@@ -920,3 +920,135 @@ def test_silk_storage_exit_code_maps_status(tmp_path: Path, monkeypatch: pytest.
         assert r is not None
         assert r["status"] == expected, f"exit {code} should give status {expected!r}"
 
+
+# ===========================================================================
+# V3 — Framework registry + spec/save + record/start framework validation
+# ===========================================================================
+
+
+def test_frameworks_returns_non_empty_list(client: TestClient) -> None:
+    """GET /api/silk/frameworks returns a non-empty list of frameworks."""
+    res = client.get("/api/silk/frameworks")
+    assert res.status_code == 200
+    data = res.json()
+    assert "frameworks" in data
+    assert len(data["frameworks"]) > 0
+
+
+def test_frameworks_contains_playwright_ts(client: TestClient) -> None:
+    """GET /api/silk/frameworks includes playwright-ts with recordable=True."""
+    res = client.get("/api/silk/frameworks")
+    assert res.status_code == 200
+    frameworks = res.json()["frameworks"]
+    ids = {fw["id"]: fw for fw in frameworks}
+    assert "playwright-ts" in ids, "playwright-ts must be in the registry"
+    pw = ids["playwright-ts"]
+    assert pw["recordable"] is True
+    assert pw["runnable"] is True
+    assert pw["kind"] == "web"
+    assert pw["codegen_target"] == "playwright-test"
+    assert pw["file_extension"] == ".spec.ts"
+    assert "template" in pw
+
+
+def test_spec_save_creates_file_and_returns_path(
+    client: TestClient, tmp_path: Path
+) -> None:
+    """POST /api/silk/spec/save writes the file and returns its path."""
+    code = "import { test } from '@playwright/test';\ntest('demo', () => {});"
+    res = client.post(
+        "/api/silk/spec/save",
+        json={
+            "framework": "playwright-ts",
+            "filename": "demo",
+            "code": code,
+            "workspace_dir": str(tmp_path),
+        },
+    )
+    assert res.status_code == 200, res.text
+    data = res.json()
+    assert "spec_path" in data
+    saved = Path(data["spec_path"])
+    assert saved.exists()
+    assert saved.read_text(encoding="utf-8") == code
+    # Extension should have been appended automatically.
+    assert saved.name.endswith(".spec.ts")
+
+
+def test_spec_save_no_workspace_uses_default_dir(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When workspace_dir is omitted the spec lands in the silk/specs/ dir."""
+    monkeypatch.setenv("THERIDION_HOME", str(tmp_path))
+    res = client.post(
+        "/api/silk/spec/save",
+        json={
+            "framework": "cypress",
+            "filename": "my_test.cy.js",
+            "code": "describe('x', () => {});",
+        },
+    )
+    assert res.status_code == 200, res.text
+    saved = Path(res.json()["spec_path"])
+    assert saved.exists()
+    # Should be inside the tmp_path silk dir.
+    assert str(tmp_path) in str(saved)
+
+
+def test_spec_save_path_traversal_rejected(
+    client: TestClient, tmp_path: Path
+) -> None:
+    """POST /api/silk/spec/save with '../' in filename returns 400."""
+    res = client.post(
+        "/api/silk/spec/save",
+        json={
+            "framework": "playwright-ts",
+            "filename": "../evil.spec.ts",
+            "code": "// bad",
+            "workspace_dir": str(tmp_path),
+        },
+    )
+    assert res.status_code == 400
+
+
+def test_spec_save_unknown_framework_returns_400(
+    client: TestClient, tmp_path: Path
+) -> None:
+    """POST /api/silk/spec/save with unknown framework returns 400."""
+    res = client.post(
+        "/api/silk/spec/save",
+        json={
+            "framework": "no-such-framework",
+            "filename": "test.ts",
+            "code": "// whatever",
+            "workspace_dir": str(tmp_path),
+        },
+    )
+    assert res.status_code == 400
+    assert "unknown framework" in res.json()["detail"]
+
+
+def test_record_start_non_recordable_framework_returns_400(
+    client: TestClient,
+) -> None:
+    """POST /api/silk/record/start with cypress (non-recordable) returns 400 before any subprocess."""
+    # Cypress is not recordable — error is raised before npx lookup.
+    res = client.post(
+        "/api/silk/record/start",
+        json={"url": "http://localhost:3000", "framework": "cypress"},
+    )
+    assert res.status_code == 400
+    assert "recording not yet supported" in res.json()["detail"]
+
+
+def test_record_start_unknown_framework_returns_400(
+    client: TestClient,
+) -> None:
+    """POST /api/silk/record/start with unknown framework id returns 400."""
+    res = client.post(
+        "/api/silk/record/start",
+        json={"url": "http://localhost:3000", "framework": "ghost-framework"},
+    )
+    assert res.status_code == 400
+    assert "unknown framework" in res.json()["detail"]
+
