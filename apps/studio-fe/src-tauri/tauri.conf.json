@@ -47,7 +47,7 @@
       "endpoints": [
         "https://github.com/qa-wave/theridion/releases/latest/download/latest-fe.json"
       ],
-      "pubkey": ""
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDFGODMzNkMyOTVFN0M4RDYKUldUV3lPZVZ3amFESDR2OCtpYm1VRnRQYVZWdGdrN2xYOXJ3K2lHRllTK1ZZQ29kTVpveC8wb0UK"
     }
   }
 }
