@@ -1,10 +1,13 @@
-"""Tests for the /api/environments CRUD + {{var}} substitution in execute."""
+"""Tests for the /api/environments CRUD + {{var}} substitution helper.
+
+Request execution (/api/requests/execute) lives in the BE sidecar — the slim
+FE sidecar deliberately omits that router (see main.create_app), so those
+integration tests belong to theridion-be, not here.
+"""
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
-from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -128,101 +131,3 @@ def test_substitution_passthrough_when_env_is_none() -> None:
     from theridion_sidecar.environments import substitute
 
     assert substitute("{{x}}", None) == "{{x}}"
-
-
-# ---- substitution in /execute ------------------------------------------
-
-class _FakeResponse:
-    def __init__(self, url: str) -> None:
-        self.status_code = 200
-        self.reason_phrase = "OK"
-        self.headers: dict[str, str] = {"content-type": "text/plain"}
-        self.text = ""
-        self.content = b""
-        self.url = url
-        self.cookies: dict[str, str] = {}
-
-
-class _FakeRequest:
-    """Minimal stand-in for httpx.Request."""
-
-    def __init__(self, **kwargs: Any) -> None:
-        self._kwargs = kwargs
-        self.extensions: dict[str, Any] = {}
-
-
-class _FakeClient:
-    """Stand-in for httpx.AsyncClient that records what it got."""
-
-    last_kwargs: dict[str, Any] = {}
-
-    def __init__(self, *_a: Any, **_kw: Any) -> None:
-        pass
-
-    async def __aenter__(self) -> "_FakeClient":
-        return self
-
-    async def __aexit__(self, *_a: Any) -> None:
-        return None
-
-    def build_request(self, **kwargs: Any) -> _FakeRequest:
-        return _FakeRequest(**kwargs)
-
-    async def send(self, request: _FakeRequest, **_kw: Any) -> _FakeResponse:
-        _FakeClient.last_kwargs = request._kwargs
-        return _FakeResponse(url=request._kwargs.get("url", ""))
-
-    async def request(self, **kwargs: Any) -> _FakeResponse:
-        _FakeClient.last_kwargs = kwargs
-        return _FakeResponse(url=kwargs.get("url", ""))
-
-
-def test_execute_substitutes_url_headers_body(client: TestClient) -> None:
-    env = client.post("/api/environments", json={"name": "E"}).json()
-    client.put(
-        f"/api/environments/{env['id']}/variables",
-        json={
-            "variables": [
-                {"name": "host", "value": "api.example.com"},
-                {"name": "tok", "value": "ABC123"},
-            ]
-        },
-    )
-    with patch("theridion_sidecar.api.requests.httpx.AsyncClient", _FakeClient):
-        res = client.post(
-            "/api/requests/execute",
-            json={
-                "method": "POST",
-                "url": "https://{{host}}/v1/things",
-                "headers": {"Authorization": "Bearer {{tok}}"},
-                "body": '{"to":"{{host}}"}',
-                "environment_id": env["id"],
-            },
-        )
-    assert res.status_code == 200
-    sent = _FakeClient.last_kwargs
-    assert sent["url"] == "https://api.example.com/v1/things"
-    assert sent["headers"]["Authorization"] == "Bearer ABC123"
-    assert sent["content"] == b'{"to":"api.example.com"}'
-    assert res.json()["resolved_url"] == "https://api.example.com/v1/things"
-
-
-def test_execute_with_unknown_environment_404s(client: TestClient) -> None:
-    res = client.post(
-        "/api/requests/execute",
-        json={
-            "url": "https://example.com",
-            "environment_id": "00000000-0000-0000-0000-000000000000",
-        },
-    )
-    assert res.status_code == 404
-
-
-def test_execute_without_env_does_not_substitute(client: TestClient) -> None:
-    with patch("theridion_sidecar.api.requests.httpx.AsyncClient", _FakeClient):
-        client.post(
-            "/api/requests/execute",
-            json={"url": "https://example.com/{{leave-me}}"},
-        )
-    # No env → placeholder stays.
-    assert "{{leave-me}}" in _FakeClient.last_kwargs["url"]
