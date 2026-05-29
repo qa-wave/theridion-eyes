@@ -1,0 +1,33 @@
+# Dependencies
+node_modules/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Build outputs
+dist/
+build/
+target/
+*.tsbuildinfo
+*.egg-info/
+
+# Tauri (bundled sidecar binaries are rebuilt, never committed)
+apps/*/src-tauri/binaries/
+apps/*/src-tauri/gen/
+
+# Vercel
+.vercel
+
+# Env
+.env
+.env.*
+!.env.example
+
+# OS / editor
+.DS_Store
+*.log
