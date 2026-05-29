@@ -3,8 +3,8 @@
 # Tag-triggered (v0.x.y) build × sign × upload for 2 Tauri apps × 3 OS = 6 artifacts.
 #
 # Apps:
-#   studio     apps/studio-fe    Theridion BE (REST/GraphQL/gRPC/SOAP/Kafka/JMS/JDBC/MQTT)
-#   studio-fe  apps/studio-fe-fe Theridion FE (Playwright multi-browser)
+#   studio     apps/studio    Theridion BE (REST/GraphQL/gRPC/SOAP/Kafka/JMS/JDBC/MQTT)
+#   studio-fe  apps/studio-fe Theridion FE (Playwright multi-browser)
 #
 # Required secrets (all optional — missing = unsigned artifact):
 #   APPLE_CERTIFICATE, APPLE_CERTIFICATE_PASSWORD, APPLE_SIGNING_IDENTITY,
@@ -128,19 +128,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # ── Theridion BE (apps/studio-fe + apps/sidecar-fe) ───────────────────
-          - app: studio-fe
-            sidecar_path: apps/sidecar-fe
-            studio_path: apps/studio-fe
-            os: macos-latest
-            target: aarch64-apple-darwin
-            platform: macos-arm64
-          - app: studio-fe
-            sidecar_path: apps/sidecar-fe
-            studio_path: apps/studio-fe
-            os: macos-13
-            target: x86_64-apple-darwin
-            platform: macos-x64
+          # ── Theridion FE — V1: Linux + Windows only ─────────────────────
+          # macOS is omitted in CI for V1 because GitHub Actions Free tier
+          # macOS runner queue averages 5+ hours and code signing requires
+          # paid Apple Developer ID anyway. Mac users build locally via
+          # `pnpm sidecar:bundle && pnpm tauri:build`. Plan: add macOS once
+          # signing certs are provisioned (see docs/signing.md).
           - app: studio-fe
             sidecar_path: apps/sidecar-fe
             studio_path: apps/studio-fe
