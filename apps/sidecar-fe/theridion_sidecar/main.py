@@ -41,6 +41,7 @@ from theridion_sidecar.api.diagnostics import router as diagnostics_router
 from theridion_sidecar.api.environments import router as environments_router
 from theridion_sidecar.api.health import router as health_router
 from theridion_sidecar.api.history import router as history_router
+from theridion_sidecar.api.mobile import router as mobile_router
 from theridion_sidecar.api.silk import router as silk_router
 
 
@@ -88,9 +89,11 @@ async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         yield
     finally:
         await app.state.http_client.aclose()
+        from theridion_sidecar.api.mobile import shutdown_appium_procs
         from theridion_sidecar.api.silk import shutdown_codegen_procs
 
         await shutdown_codegen_procs()
+        await shutdown_appium_procs()
 
 
 def _token_file_path() -> Path:
@@ -164,6 +167,7 @@ def create_app() -> FastAPI:
     app.include_router(environments_router)
     app.include_router(history_router)
     app.include_router(silk_router)
+    app.include_router(mobile_router)
 
     return app
 
