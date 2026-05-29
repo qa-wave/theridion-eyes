@@ -142,6 +142,10 @@ def create_app() -> FastAPI:
             )
         return {"status": "ok", "storage": str(home), "product": "fe"}
 
+    # Order matters: Starlette applies the last-added middleware outermost.
+    # TokenAuth is added first (inner) and CORS last (outer) so CORS can
+    # answer the preflight OPTIONS request before auth rejects it.
+    app.add_middleware(_TokenAuthMiddleware)
     app.add_middleware(
         CORSMiddleware,
         allow_origin_regex=(
@@ -153,7 +157,6 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
-    app.add_middleware(_TokenAuthMiddleware)
 
     # Slim router set — only what Silk + base Tauri shell need
     app.include_router(health_router)
