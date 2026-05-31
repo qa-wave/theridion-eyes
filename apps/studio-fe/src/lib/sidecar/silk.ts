@@ -186,6 +186,54 @@ export interface SilkBaselineCompareOutput {
   approved: boolean;
 }
 
+export interface SilkBaselineApproveInput {
+  test_id: string;
+  candidate_path: string;
+  browser?: string;
+  viewport?: string;
+  approved_by?: string;
+  diff_ratio?: number;
+}
+
+export interface SilkBaselineApproveOutput {
+  baseline_path: string;
+  test_id: string;
+  browser: string;
+  viewport: string;
+  approved: boolean;
+  approved_by: string;
+  approved_at: string;
+  diff_ratio: number;
+}
+
+// ---- Record save-and-run bridge ----
+
+export interface SilkRecordSaveAndRunInput {
+  session_id: string;
+  framework?: string;
+  filename?: string;
+  workspace_dir?: string;
+  browsers?: ("chromium" | "firefox" | "webkit")[];
+  timeout_ms?: number;
+}
+
+export interface SilkRecordSaveAndRunOutput {
+  spec_path: string;
+  run: SilkRunOutput;
+}
+
+// ---- Attachment data (parsed from json_report) ----
+
+export interface SilkNetworkEntry {
+  request?: { method?: string; url?: string };
+  response?: { status?: number; content?: { mimeType?: string } };
+  [key: string]: unknown;
+}
+
+export interface SilkScreenshotInfo {
+  path: string;
+}
+
 // ---- Run history ----
 
 export interface SilkRunHistoryEntry {
@@ -324,6 +372,26 @@ export const silkMethods = {
     input: SilkBaselineCompareInput,
   ): Promise<SilkBaselineCompareOutput> {
     return call<SilkBaselineCompareOutput>("/api/silk/baseline/compare", {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+  },
+
+  /** Approve a candidate screenshot, promoting it to the stored baseline. */
+  silkBaselineApprove(
+    input: SilkBaselineApproveInput,
+  ): Promise<SilkBaselineApproveOutput> {
+    return call<SilkBaselineApproveOutput>("/api/silk/baseline/approve", {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+  },
+
+  /** Stop recording session, save the spec, and immediately run it. */
+  silkRecordSaveAndRun(
+    input: SilkRecordSaveAndRunInput,
+  ): Promise<SilkRecordSaveAndRunOutput> {
+    return call<SilkRecordSaveAndRunOutput>("/api/silk/record/save-and-run", {
       method: "POST",
       body: JSON.stringify(input),
     });

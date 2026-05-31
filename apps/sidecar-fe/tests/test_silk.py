@@ -12,10 +12,17 @@ New (v2 — ~30 additional):
   - POST /api/silk/run multi-browser, mocks, a11y fields
   - POST /api/silk/record/start — codegen subprocess
   - POST /api/silk/record/stop  — terminate + spec capture
-  - POST /api/silk/baseline/save + /baseline/compare
+  - POST /api/silk/baseline/save + /baseline/compare + /baseline/approve
   - GET  /api/silk/runs + /runs/{id} — history persistence
   - silk_storage module directly
   - _build_mock_wrapper helper
+
+New (Phase 4 — Eyes core):
+  - Async concurrent multi-browser run via _run_single_browser_async mock
+  - A11y violations parsed from axe-results.json attachments
+  - Network + screenshot attachment parsing
+  - Baseline approve workflow
+  - record/save-and-run bridge
 
 Token auth is handled globally by conftest.py (_pin_sidecar_token + patched
 TestClient.__init__), so individual tests do not need HEADERS dicts or env
@@ -27,10 +34,62 @@ from __future__ import annotations
 import json
 import subprocess
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
+
+
+# ---------------------------------------------------------------------------
+# Helpers for async subprocess mocking
+# ---------------------------------------------------------------------------
+
+def _make_async_browser_result(
+    browser: str = "chromium",
+    returncode: int = 0,
+    json_report: dict | None = None,
+    stderr: str = "",
+):
+    """Build a BrowserRunResult-like coroutine result for patching _run_single_browser_async."""
+    from theridion_sidecar.api.silk import BrowserRunResult, A11yViolation
+
+    report = json_report or {"stats": {"expected": 1, "unexpected": 0, "skipped": 0}, "suites": []}
+    passed = report.get("stats", {}).get("expected", 0)
+    failed = report.get("stats", {}).get("unexpected", 0)
+
+    return BrowserRunResult(
+        browser=browser,
+        exit_code=returncode,
+        passed=passed,
+        failed=failed,
+        errors=0,
+        duration_ms=100,
+        trace_path=None,
+        stderr_tail=stderr,
+        json_report=report,
+        a11y_violations=[],
+    )
+
+
+def _patch_async_run(browser_results: dict[str, object] | None = None):
+    """Return a context manager that patches _run_single_browser_async.
+
+    *browser_results* maps browser name → BrowserRunResult.  If omitted a
+    single chromium pass result is used.
+    """
+    from theridion_sidecar.api.silk import BrowserRunResult
+
+    default = _make_async_browser_result("chromium")
+    results = browser_results or {"chromium": default}
+
+    async def _fake_async(**kwargs: object) -> BrowserRunResult:
+        browser = str(kwargs.get("browser", "chromium"))
+        return results.get(browser, default)  # type: ignore[return-value]
+
+    return patch(
+        "theridion_sidecar.api.silk._run_single_browser_async",
+        side_effect=_fake_async,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -115,18 +174,8 @@ def test_run_npx_not_found(client: TestClient, tmp_path: Path) -> None:
 
 def test_run_inline_code_success(client: TestClient) -> None:
     """Inline code path writes temp file and returns a run result."""
-    fake_json_report = {
-        "stats": {"expected": 1, "unexpected": 0, "skipped": 0},
-        "suites": [],
-    }
-
-    mock_result = MagicMock()
-    mock_result.returncode = 0
-    mock_result.stdout = json.dumps(fake_json_report)
-    mock_result.stderr = ""
-
     with patch("shutil.which", return_value="/usr/bin/npx"), \
-         patch("subprocess.run", return_value=mock_result):
+         _patch_async_run():
         res = client.post(
             "/api/silk/run",
             json={"inline_code": "import { test } from '@playwright/test';"},
@@ -142,21 +191,18 @@ def test_run_inline_code_success(client: TestClient) -> None:
 
 def test_run_captures_failed_tests(client: TestClient, tmp_path: Path) -> None:
     """failed field reflects unexpected count from Playwright JSON report."""
-    fake_report = {
+    failed_report = {
         "stats": {"expected": 0, "unexpected": 2, "skipped": 0},
         "suites": [],
     }
-
-    mock_result = MagicMock()
-    mock_result.returncode = 1
-    mock_result.stdout = json.dumps(fake_report)
-    mock_result.stderr = "FAIL my.spec.ts"
 
     spec = tmp_path / "fail.spec.ts"
     spec.write_text("", encoding="utf-8")
 
     with patch("shutil.which", return_value="/usr/bin/npx"), \
-         patch("subprocess.run", return_value=mock_result):
+         _patch_async_run({"chromium": _make_async_browser_result(
+             "chromium", returncode=1, json_report=failed_report, stderr="FAIL my.spec.ts"
+         )}):
         res = client.post(
             "/api/silk/run",
             json={"spec_path": str(spec)},
@@ -170,11 +216,26 @@ def test_run_captures_failed_tests(client: TestClient, tmp_path: Path) -> None:
 
 def test_run_timeout_raises_504(client: TestClient, tmp_path: Path) -> None:
     """Returns 504 when the subprocess times out."""
+    from theridion_sidecar.api.silk import BrowserRunResult
+
     spec = tmp_path / "slow.spec.ts"
     spec.write_text("", encoding="utf-8")
 
+    timed_out_result = BrowserRunResult(
+        browser="chromium",
+        exit_code=-1,
+        passed=0,
+        failed=0,
+        errors=1,
+        duration_ms=1000,
+        stderr_tail="Timed out after 1s",
+    )
+
+    async def _fake_timeout(**kwargs: object) -> BrowserRunResult:
+        return timed_out_result
+
     with patch("shutil.which", return_value="/usr/bin/npx"), \
-         patch("subprocess.run", side_effect=subprocess.TimeoutExpired("npx", 1)):
+         patch("theridion_sidecar.api.silk._run_single_browser_async", side_effect=_fake_timeout):
         res = client.post(
             "/api/silk/run",
             json={"spec_path": str(spec), "timeout_ms": 1000},
@@ -435,21 +496,15 @@ def test_install_browsers_sync_success(client: TestClient) -> None:
 
 
 def test_run_multi_browser_aggregates(client: TestClient, tmp_path: Path) -> None:
-    """Multi-browser run aggregates passed/failed across browsers."""
-    fake_report = {
-        "stats": {"expected": 1, "unexpected": 0, "skipped": 0},
-        "suites": [],
-    }
-    mock_result = MagicMock()
-    mock_result.returncode = 0
-    mock_result.stdout = json.dumps(fake_report)
-    mock_result.stderr = ""
-
+    """Multi-browser run aggregates passed/failed across browsers concurrently."""
     spec = tmp_path / "multi.spec.ts"
     spec.write_text("import {test} from '@playwright/test';", encoding="utf-8")
 
     with patch("shutil.which", return_value="/usr/bin/npx"), \
-         patch("subprocess.run", return_value=mock_result):
+         _patch_async_run({
+             "chromium": _make_async_browser_result("chromium"),
+             "firefox": _make_async_browser_result("firefox"),
+         }):
         res = client.post(
             "/api/silk/run",
             json={
@@ -487,17 +542,11 @@ def test_run_unknown_browser_returns_400(client: TestClient, tmp_path: Path) -> 
 
 def test_run_a11y_field_present_in_output(client: TestClient, tmp_path: Path) -> None:
     """Run output always contains a11y_violations key (even when empty)."""
-    fake_report = {"stats": {"expected": 1, "unexpected": 0, "skipped": 0}, "suites": []}
-    mock_result = MagicMock()
-    mock_result.returncode = 0
-    mock_result.stdout = json.dumps(fake_report)
-    mock_result.stderr = ""
-
     spec = tmp_path / "a11y.spec.ts"
     spec.write_text("test('x', () => {})", encoding="utf-8")
 
     with patch("shutil.which", return_value="/usr/bin/npx"), \
-         patch("subprocess.run", return_value=mock_result):
+         _patch_async_run():
         res = client.post(
             "/api/silk/run",
             json={"spec_path": str(spec), "run_accessibility_audit": True},
@@ -511,14 +560,6 @@ def test_run_a11y_field_present_in_output(client: TestClient, tmp_path: Path) ->
 
 def test_run_with_mocks_injects_wrapper(client: TestClient, tmp_path: Path) -> None:
     """Mock rules cause wrapper spec to be written (temp file contains route calls)."""
-    captured_cmds: list[list[str]] = []
-
-    fake_report = {"stats": {"expected": 1, "unexpected": 0, "skipped": 0}, "suites": []}
-    mock_result = MagicMock()
-    mock_result.returncode = 0
-    mock_result.stdout = json.dumps(fake_report)
-    mock_result.stderr = ""
-
     written_specs: list[str] = []
 
     original_write = Path.write_text
@@ -532,7 +573,7 @@ def test_run_with_mocks_injects_wrapper(client: TestClient, tmp_path: Path) -> N
     spec.write_text("import { test } from '@playwright/test';", encoding="utf-8")
 
     with patch("shutil.which", return_value="/usr/bin/npx"), \
-         patch("subprocess.run", return_value=mock_result), \
+         _patch_async_run(), \
          patch.object(Path, "write_text", patched_write):
         res = client.post(
             "/api/silk/run",
@@ -763,14 +804,9 @@ def test_run_saved_to_history(
 ) -> None:
     """After a successful run, GET /api/silk/runs returns it."""
     monkeypatch.setenv("THERIDION_HOME", str(tmp_path))
-    fake_report = {"stats": {"expected": 1, "unexpected": 0, "skipped": 0}, "suites": []}
-    mock_result = MagicMock()
-    mock_result.returncode = 0
-    mock_result.stdout = json.dumps(fake_report)
-    mock_result.stderr = ""
 
     with patch("shutil.which", return_value="/usr/bin/npx"), \
-         patch("subprocess.run", return_value=mock_result):
+         _patch_async_run():
         run_res = client.post(
             "/api/silk/run",
             json={"inline_code": "test('x', () => {});"},
@@ -792,14 +828,12 @@ def test_run_history_single_entry(
 ) -> None:
     """GET /api/silk/runs/{id} returns full entry with status field."""
     monkeypatch.setenv("THERIDION_HOME", str(tmp_path))
-    fake_report = {"stats": {"expected": 0, "unexpected": 1, "skipped": 0}, "suites": []}
-    mock_result = MagicMock()
-    mock_result.returncode = 1
-    mock_result.stdout = json.dumps(fake_report)
-    mock_result.stderr = "FAIL"
+    failed_report = {"stats": {"expected": 0, "unexpected": 1, "skipped": 0}, "suites": []}
 
     with patch("shutil.which", return_value="/usr/bin/npx"), \
-         patch("subprocess.run", return_value=mock_result):
+         _patch_async_run({"chromium": _make_async_browser_result(
+             "chromium", returncode=1, json_report=failed_report, stderr="FAIL"
+         )}):
         run_res = client.post(
             "/api/silk/run",
             json={"inline_code": "test('fail', () => { expect(1).toBe(2); });"},
@@ -830,14 +864,8 @@ def test_run_history_limit_param(
     """GET /api/silk/runs?limit=1 returns at most 1 entry."""
     monkeypatch.setenv("THERIDION_HOME", str(tmp_path))
 
-    fake_report = {"stats": {"expected": 1, "unexpected": 0, "skipped": 0}, "suites": []}
-    mock_result = MagicMock()
-    mock_result.returncode = 0
-    mock_result.stdout = json.dumps(fake_report)
-    mock_result.stderr = ""
-
     with patch("shutil.which", return_value="/usr/bin/npx"), \
-         patch("subprocess.run", return_value=mock_result):
+         _patch_async_run():
         for _ in range(3):
             client.post("/api/silk/run", json={"inline_code": "test('x', ()=>{})"})
 
@@ -1052,3 +1080,392 @@ def test_record_start_unknown_framework_returns_400(
     assert res.status_code == 400
     assert "unknown framework" in res.json()["detail"]
 
+
+# ===========================================================================
+# Phase 4 — Eyes core fixes
+# ===========================================================================
+
+
+# ---------------------------------------------------------------------------
+# Async multi-browser concurrent run
+# ---------------------------------------------------------------------------
+
+
+def test_run_browsers_called_concurrently(client: TestClient, tmp_path: Path) -> None:
+    """Each browser is passed to _run_single_browser_async (concurrency is wired)."""
+    called_browsers: list[str] = []
+
+    async def _fake(*, browser: str, **kwargs: object):  # type: ignore[override]
+        called_browsers.append(browser)
+        return _make_async_browser_result(browser)
+
+    spec = tmp_path / "concurrent.spec.ts"
+    spec.write_text("test('x', ()=>{})", encoding="utf-8")
+
+    with patch("shutil.which", return_value="/usr/bin/npx"), \
+         patch("theridion_sidecar.api.silk._run_single_browser_async", side_effect=_fake):
+        res = client.post(
+            "/api/silk/run",
+            json={"spec_path": str(spec), "browsers": ["chromium", "firefox", "webkit"]},
+        )
+
+    assert res.status_code == 200
+    assert set(called_browsers) == {"chromium", "firefox", "webkit"}
+
+
+# ---------------------------------------------------------------------------
+# Axe-core a11y — parse from json_report attachments
+# ---------------------------------------------------------------------------
+
+
+def test_parse_a11y_violations_from_report() -> None:
+    """_parse_a11y_violations extracts violations from axe-results.json attachment."""
+    import base64
+    from theridion_sidecar.api.silk import _parse_a11y_violations
+
+    axe_data = {
+        "violations": [
+            {
+                "id": "color-contrast",
+                "impact": "serious",
+                "description": "Elements must meet minimum contrast ratio",
+                "nodes": [{"target": ["#btn"]}],
+            },
+            {
+                "id": "label",
+                "impact": "critical",
+                "description": "Form inputs must have labels",
+                "nodes": [{"target": ["input[type=text]"]}],
+            },
+        ]
+    }
+
+    # Raw JSON body (plain text).
+    report = {
+        "suites": [
+            {
+                "specs": [
+                    {
+                        "tests": [
+                            {
+                                "results": [
+                                    {
+                                        "attachments": [
+                                            {
+                                                "name": "axe-results.json",
+                                                "contentType": "application/json",
+                                                "body": json.dumps(axe_data),
+                                            }
+                                        ]
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                ],
+                "suites": [],
+            }
+        ]
+    }
+
+    violations = _parse_a11y_violations(report)
+    assert len(violations) == 2
+    rules = {v.rule for v in violations}
+    assert "color-contrast" in rules
+    assert "label" in rules
+    impacts = {v.impact for v in violations}
+    assert "serious" in impacts
+    assert "critical" in impacts
+
+
+def test_parse_a11y_violations_base64_body() -> None:
+    """_parse_a11y_violations handles base64-encoded attachment body."""
+    import base64
+    from theridion_sidecar.api.silk import _parse_a11y_violations
+
+    axe_data = {
+        "violations": [
+            {"id": "aria-required-attr", "impact": "critical", "description": "ARIA", "nodes": [{"target": ["[role=button]"]}]},
+        ]
+    }
+
+    encoded = base64.b64encode(json.dumps(axe_data).encode()).decode()
+    report = {
+        "suites": [
+            {
+                "specs": [
+                    {"tests": [{"results": [{"attachments": [{"name": "axe-results.json", "contentType": "application/json", "body": encoded}]}]}]}
+                ],
+                "suites": [],
+            }
+        ]
+    }
+    violations = _parse_a11y_violations(report)
+    assert len(violations) == 1
+    assert violations[0].rule == "aria-required-attr"
+
+
+def test_parse_a11y_violations_empty_report() -> None:
+    """Returns empty list for None report."""
+    from theridion_sidecar.api.silk import _parse_a11y_violations
+    assert _parse_a11y_violations(None) == []
+
+
+def test_run_a11y_violations_from_attachment(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Run result includes a11y violations passed back by the browser runner."""
+    from theridion_sidecar.api.silk import BrowserRunResult, A11yViolation
+
+    monkeypatch.setenv("THERIDION_HOME", str(tmp_path))
+
+    a11y_result = BrowserRunResult(
+        browser="chromium",
+        exit_code=0,
+        passed=1,
+        failed=0,
+        errors=0,
+        duration_ms=100,
+        trace_path=None,
+        stderr_tail="",
+        json_report={"stats": {"expected": 1, "unexpected": 0, "skipped": 0}, "suites": []},
+        a11y_violations=[
+            A11yViolation(rule="color-contrast", impact="serious", description="Contrast", nodes=["#el"])
+        ],
+    )
+
+    spec = tmp_path / "a11y_attach.spec.ts"
+    spec.write_text("test('x',()=>{})", encoding="utf-8")
+
+    async def _fake(*, browser: str, **kwargs: object):
+        return a11y_result
+
+    with patch("shutil.which", return_value="/usr/bin/npx"), \
+         patch("theridion_sidecar.api.silk._run_single_browser_async", side_effect=_fake):
+        res = client.post("/api/silk/run", json={
+            "spec_path": str(spec),
+            "run_accessibility_audit": True,
+        })
+
+    assert res.status_code == 200
+    data = res.json()
+    violations = data["a11y_violations"]
+    assert len(violations) == 1
+    assert violations[0]["rule"] == "color-contrast"
+    assert violations[0]["impact"] == "serious"
+
+
+# ---------------------------------------------------------------------------
+# Network and screenshot attachment parsing
+# ---------------------------------------------------------------------------
+
+
+def test_parse_network_entries_from_har() -> None:
+    """_parse_network_entries extracts HAR entries from network.json attachment."""
+    from theridion_sidecar.api.silk import _parse_network_entries
+
+    har_data = {
+        "log": {
+            "entries": [
+                {"request": {"method": "GET", "url": "https://example.com/api"}},
+                {"request": {"method": "POST", "url": "https://example.com/api/data"}},
+            ]
+        }
+    }
+
+    report = {
+        "suites": [
+            {
+                "specs": [
+                    {"tests": [{"results": [{"attachments": [
+                        {"name": "network.json", "contentType": "application/json", "body": json.dumps(har_data)}
+                    ]}]}]}
+                ],
+                "suites": [],
+            }
+        ]
+    }
+
+    entries = _parse_network_entries(report)
+    assert len(entries) == 2
+    assert entries[0]["request"]["method"] == "GET"
+
+
+def test_parse_screenshot_paths_from_report() -> None:
+    """_parse_screenshot_paths extracts PNG paths from test attachments."""
+    from theridion_sidecar.api.silk import _parse_screenshot_paths
+
+    report = {
+        "suites": [
+            {
+                "specs": [
+                    {"tests": [{"results": [{"attachments": [
+                        {"name": "screenshot", "contentType": "image/png", "path": "/tmp/screen1.png"},
+                        {"name": "diff", "contentType": "image/png", "path": "/tmp/diff.png"},
+                    ]}]}]}
+                ],
+                "suites": [],
+            }
+        ]
+    }
+
+    paths = _parse_screenshot_paths(report)
+    assert "/tmp/screen1.png" in paths
+    assert "/tmp/diff.png" in paths
+
+
+def test_parse_screenshot_paths_empty() -> None:
+    """Returns empty list for None or empty report."""
+    from theridion_sidecar.api.silk import _parse_screenshot_paths
+    assert _parse_screenshot_paths(None) == []
+    assert _parse_screenshot_paths({"suites": []}) == []
+
+
+# ---------------------------------------------------------------------------
+# Baseline approve
+# ---------------------------------------------------------------------------
+
+
+def test_baseline_approve_promotes_candidate(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """POST /api/silk/baseline/approve copies candidate over baseline + writes metadata."""
+    try:
+        from PIL import Image
+    except ImportError:
+        pytest.skip("Pillow not installed")
+
+    monkeypatch.setenv("THERIDION_HOME", str(tmp_path))
+
+    # Create candidate image.
+    candidate = tmp_path / "candidate.png"
+    Image.new("RGB", (50, 50), color=(0, 128, 255)).save(str(candidate))
+
+    res = client.post(
+        "/api/silk/baseline/approve",
+        json={
+            "test_id": "login-form",
+            "candidate_path": str(candidate),
+            "browser": "chromium",
+            "viewport": "1280x720",
+            "approved_by": "tester@example.com",
+            "diff_ratio": 0.05,
+        },
+    )
+
+    assert res.status_code == 200, res.text
+    data = res.json()
+    assert data["approved"] is True
+    assert data["approved_by"] == "tester@example.com"
+    assert abs(data["diff_ratio"] - 0.05) < 1e-6
+    assert "approved_at" in data
+
+    # Baseline file should exist.
+    baseline_path = Path(data["baseline_path"])
+    assert baseline_path.exists()
+
+    # Metadata sidecar should also exist.
+    meta_path = Path(str(baseline_path) + ".approved.json")
+    assert meta_path.exists()
+    import json as _json
+    meta = _json.loads(meta_path.read_text())
+    assert meta["approved"] is True
+    assert meta["approved_by"] == "tester@example.com"
+    assert meta["test_id"] == "login-form"
+
+
+def test_baseline_approve_missing_candidate(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Returns 404 when candidate_path does not exist."""
+    monkeypatch.setenv("THERIDION_HOME", str(tmp_path))
+    res = client.post(
+        "/api/silk/baseline/approve",
+        json={
+            "test_id": "x",
+            "candidate_path": str(tmp_path / "nonexistent.png"),
+        },
+    )
+    assert res.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# RunResult v2 _publish function (best-effort, no network side-effects)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_publish_run_result_v2_no_urls_noop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """_publish_run_result_v2 is a no-op when no env vars are set."""
+    monkeypatch.delenv("EYES_HUB_URL", raising=False)
+    monkeypatch.delenv("EYES_WEAVE_URL", raising=False)
+
+    from theridion_sidecar.api.silk import _publish_run_result_v2
+
+    await _publish_run_result_v2(
+        run_id="test-run",
+        spec_label="test.spec.ts",
+        browsers=["chromium"],
+        per_browser={},
+        overall_exit=0,
+        agg_passed=1,
+        agg_failed=0,
+        duration_ms=100,
+    )
+
+
+@pytest.mark.asyncio
+async def test_publish_run_result_v2_payload_shape(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """_publish_run_result_v2 sends a schema_version=2 + product=eyes payload."""
+    from unittest.mock import patch as _patch
+    from theridion_sidecar.api.silk import _publish_run_result_v2, BrowserRunResult
+
+    monkeypatch.setenv("EYES_HUB_URL", "http://hub.local")
+    monkeypatch.setenv("EYES_TOKEN", "tok123")
+    monkeypatch.delenv("EYES_WEAVE_URL", raising=False)
+
+    captured_payloads: list[dict] = []
+
+    class FakeResponse:
+        status_code = 200
+
+    class FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a: object) -> None:
+            pass
+
+        async def post(self, url: str, *, json: dict | None = None, headers: dict | None = None) -> FakeResponse:
+            captured_payloads.append(json or {})
+            return FakeResponse()
+
+    br = BrowserRunResult(
+        browser="chromium", exit_code=0, passed=2, failed=0, errors=0,
+        duration_ms=500, trace_path=None, stderr_tail="", json_report=None,
+    )
+
+    with _patch("httpx.AsyncClient", return_value=FakeClient()):
+        await _publish_run_result_v2(
+            run_id="run-abc",
+            spec_label="e2e.spec.ts",
+            browsers=["chromium"],
+            per_browser={"chromium": br},
+            overall_exit=0,
+            agg_passed=2,
+            agg_failed=0,
+            duration_ms=500,
+        )
+
+    assert len(captured_payloads) == 1
+    payload = captured_payloads[0]
+    assert payload["schema_version"] == 2
+    assert payload["product"] == "eyes"
+    assert payload["run_id"] == "run-abc"
+    assert payload["passed"] == 2
+    assert payload["failed"] == 0
+    assert isinstance(payload["requests"], list)

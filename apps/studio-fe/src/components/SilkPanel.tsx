@@ -22,6 +22,7 @@ import {
   CheckCircle2,
   Clock,
   Download,
+  ExternalLink,
   FileCode,
   Globe,
   History,
@@ -38,10 +39,12 @@ import {
 import { EmptyState } from "./EmptyState";
 import { NewTestDialog } from "./NewTestDialog";
 import { sidecar } from "../lib/sidecar";
+import { getSidecarBaseUrl, getSidecarToken } from "../lib/sidecar/client";
 import type {
   SilkA11yViolation,
   SilkBrowserRunResult,
   SilkFramework,
+  SilkNetworkEntry,
   SilkRunHistoryEntry,
   SilkRunOutput,
 } from "../lib/sidecar/silk";
@@ -97,6 +100,84 @@ function ImpactBadge({ impact }: { impact: string }) {
 function durationLabel(ms: number): string {
   if (ms < 1000) return `${ms}ms`;
   return `${(ms / 1000).toFixed(1)}s`;
+}
+
+// ---------------------------------------------------------------------------
+// Attachment parsers (mirror Python _parse_network_entries / _parse_screenshot_paths)
+// ---------------------------------------------------------------------------
+
+function extractNetworkEntries(report: Record<string, unknown> | null): SilkNetworkEntry[] {
+  if (!report) return [];
+  const entries: SilkNetworkEntry[] = [];
+
+  function walkSuites(suites: unknown[]): void {
+    for (const suite of suites) {
+      if (typeof suite !== "object" || !suite) continue;
+      const s = suite as Record<string, unknown>;
+      for (const spec of (s.specs as unknown[] | undefined) ?? []) {
+        if (typeof spec !== "object" || !spec) continue;
+        for (const test of ((spec as Record<string, unknown>).tests as unknown[] | undefined) ?? []) {
+          if (typeof test !== "object" || !test) continue;
+          for (const result of ((test as Record<string, unknown>).results as unknown[] | undefined) ?? []) {
+            if (typeof result !== "object" || !result) continue;
+            for (const att of ((result as Record<string, unknown>).attachments as unknown[] | undefined) ?? []) {
+              if (typeof att !== "object" || !att) continue;
+              const a = att as Record<string, unknown>;
+              if (a.name !== "network.json" && a.name !== "har.json") continue;
+              const body = a.body as string | undefined;
+              if (!body) continue;
+              try {
+                const data = JSON.parse(body) as Record<string, unknown>;
+                const ents = (data.log as Record<string, unknown> | undefined)?.entries as SilkNetworkEntry[] | undefined;
+                if (Array.isArray(ents)) entries.push(...ents);
+              } catch {
+                // ignore malformed
+              }
+            }
+          }
+        }
+      }
+      walkSuites((s.suites as unknown[] | undefined) ?? []);
+    }
+  }
+
+  walkSuites((report.suites as unknown[] | undefined) ?? []);
+  return entries;
+}
+
+function extractScreenshotPaths(report: Record<string, unknown> | null): string[] {
+  if (!report) return [];
+  const paths: string[] = [];
+
+  function walkSuites(suites: unknown[]): void {
+    for (const suite of suites) {
+      if (typeof suite !== "object" || !suite) continue;
+      const s = suite as Record<string, unknown>;
+      for (const spec of (s.specs as unknown[] | undefined) ?? []) {
+        if (typeof spec !== "object" || !spec) continue;
+        for (const test of ((spec as Record<string, unknown>).tests as unknown[] | undefined) ?? []) {
+          if (typeof test !== "object" || !test) continue;
+          for (const result of ((test as Record<string, unknown>).results as unknown[] | undefined) ?? []) {
+            if (typeof result !== "object" || !result) continue;
+            for (const att of ((result as Record<string, unknown>).attachments as unknown[] | undefined) ?? []) {
+              if (typeof att !== "object" || !att) continue;
+              const a = att as Record<string, unknown>;
+              const ct = String(a.contentType ?? "");
+              const name = String(a.name ?? "");
+              const path = String(a.path ?? "");
+              if (path && (ct.startsWith("image/") || name.toLowerCase().includes("screenshot") || path.endsWith(".png"))) {
+                paths.push(path);
+              }
+            }
+          }
+        }
+      }
+      walkSuites((s.suites as unknown[] | undefined) ?? []);
+    }
+  }
+
+  walkSuites((report.suites as unknown[] | undefined) ?? []);
+  return paths;
 }
 
 function timeAgo(isoOrMs: string | number): string {
@@ -344,19 +425,57 @@ function InstallDialog({
 // Record dialog
 // ---------------------------------------------------------------------------
 
+/**
+ * SSE streaming via fetch — works under Tauri where EventSource cannot send
+ * the X-Theridion-Token auth header.  We open a streaming fetch, read lines,
+ * and accumulate them in state.  The abort controller lets us cancel early
+ * when the user hits "Stop recording" or "Cancel".
+ */
+async function* _fetchSSELines(
+  url: string,
+  token: string | null,
+  signal: AbortSignal,
+): AsyncGenerator<string> {
+  const headers: Record<string, string> = {};
+  if (token) headers["X-Theridion-Token"] = token;
+  const res = await fetch(url, { headers, signal });
+  if (!res.ok || !res.body) return;
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    const parts = buf.split("\n");
+    buf = parts.pop() ?? "";
+    for (const part of parts) {
+      const trimmed = part.trim();
+      if (trimmed.startsWith("data:")) {
+        yield trimmed.slice(5).trim();
+      }
+    }
+  }
+}
+
 function RecordDialog({
   onCapture,
+  onRunNow,
   onCancel,
 }: {
+  /** Called when recording stops and user wants to just keep the spec text. */
   onCapture: (specCode: string, specPath: string | null) => void;
+  /** Called when user wants to save + immediately run the recorded spec. */
+  onRunNow: (sessionId: string, framework: string) => void;
   onCancel: () => void;
 }) {
   const [url, setUrl] = useState("http://localhost:3000");
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [liveLines, setLiveLines] = useState<string[]>([]);
   const [stopping, setStopping] = useState(false);
+  const [capturedSpec, setCapturedSpec] = useState<{ code: string; path: string | null } | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const esRef = useRef<EventSource | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
   const logRef = useRef<HTMLDivElement>(null);
 
   // Framework selection
@@ -388,22 +507,37 @@ function RecordDialog({
 
   useEffect(() => {
     return () => {
-      esRef.current?.close();
+      abortRef.current?.abort();
     };
   }, []);
 
   const selectedFramework = frameworks.find((f) => f.id === selectedFrameworkId) ?? null;
-  // Recording is enabled when: no framework loaded yet (null) or framework.recordable === true.
-  // The 4 transpile-target frameworks (cypress, selenium-python, selenium-java, webdriverio)
-  // have recordable: true AND recordable_via_transpile: true — they are also allowed.
   const canRecord = selectedFramework === null || selectedFramework.recordable;
 
+  /** Start codegen and immediately open the fetch-based SSE stream. */
   const handleStart = async () => {
     setError(null);
     try {
       const res = await sidecar.silkRecordStart({ url, framework: selectedFrameworkId });
       setSessionId(res.session_id);
       setLiveLines([res.message]);
+
+      // Open SSE stream with fetch (compatible with Tauri auth headers).
+      const [base, token] = await Promise.all([getSidecarBaseUrl(), getSidecarToken()]);
+      const streamUrl = `${base}/api/silk/record/stream/${encodeURIComponent(res.session_id)}`;
+      const ctrl = new AbortController();
+      abortRef.current = ctrl;
+
+      void (async () => {
+        try {
+          for await (const line of _fetchSSELines(streamUrl, token, ctrl.signal)) {
+            if (line === "DONE") break;
+            setLiveLines((prev) => [...prev, line]);
+          }
+        } catch {
+          // AbortError when user clicks cancel — expected.
+        }
+      })();
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : String(e));
     }
@@ -412,13 +546,25 @@ function RecordDialog({
   const handleStop = async () => {
     if (!sessionId) return;
     setStopping(true);
-    esRef.current?.close();
+    abortRef.current?.abort();
     try {
       const res = await sidecar.silkRecordStop(sessionId);
-      onCapture(res.spec_text, res.spec_path);
+      setCapturedSpec({ code: res.spec_text, path: res.spec_path });
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : String(e));
       setStopping(false);
+    }
+  };
+
+  const handleKeep = () => {
+    if (capturedSpec) {
+      onCapture(capturedSpec.code, capturedSpec.path);
+    }
+  };
+
+  const handleRunNow = () => {
+    if (sessionId) {
+      onRunNow(sessionId, selectedFrameworkId);
     }
   };
 
@@ -430,7 +576,8 @@ function RecordDialog({
           <h2 className="font-semibold text-sm">Record new spec</h2>
         </div>
 
-        {!sessionId ? (
+        {/* ── Phase 1: setup ── */}
+        {!sessionId && !capturedSpec && (
           <>
             {/* Framework selector */}
             <div className="flex flex-col gap-1">
@@ -457,13 +604,11 @@ function RecordDialog({
                   )}
                 </select>
               )}
-              {/* Transpile-via-Playwright hint — recordable but goes through transpiler */}
               {canRecord && selectedFramework?.recordable_via_transpile && (
                 <p className="text-[10px] text-neutral-400 mt-0.5">
                   Nahráno přes Playwright a převedeno do {selectedFramework.label}.
                 </p>
               )}
-              {/* Truly non-recordable hint (mobile frameworks) */}
               {!canRecord && selectedFramework && (
                 <p className="text-[10px] text-amber-400 mt-0.5">
                   Nahrávání zatím není podporováno pro {selectedFramework.label} — použij{" "}
@@ -497,7 +642,10 @@ function RecordDialog({
               </button>
             </div>
           </>
-        ) : (
+        )}
+
+        {/* ── Phase 2: recording in progress ── */}
+        {sessionId && !capturedSpec && (
           <>
             <div className="text-xs text-neutral-400">
               Playwright codegen is open in a browser window. Interact with your app,
@@ -523,6 +671,42 @@ function RecordDialog({
               >
                 {stopping ? <RefreshCw size={11} className="animate-spin" /> : <Square size={11} />}
                 Stop recording
+              </button>
+            </div>
+          </>
+        )}
+
+        {/* ── Phase 3: spec captured — offer Run Now or Keep ── */}
+        {capturedSpec && (
+          <>
+            <div className="text-xs text-neutral-400">
+              Spec captured successfully.{" "}
+              <strong className="text-neutral-200">Run Now</strong> saves it and immediately
+              executes it, or{" "}
+              <strong className="text-neutral-200">Keep</strong> saves it for later.
+            </div>
+            <div className="h-24 overflow-y-auto rounded bg-neutral-950 p-3 font-mono text-[10px] text-neutral-400 select-text">
+              {capturedSpec.code.split("\n").slice(0, 12).join("\n")}
+              {capturedSpec.code.split("\n").length > 12 && "\n…"}
+            </div>
+            {error && <div className="text-xs text-red-400">{error}</div>}
+            <div className="flex justify-end gap-2">
+              <button onClick={onCancel} className="rounded px-3 py-1.5 text-xs bg-neutral-800 hover:bg-neutral-700 text-neutral-300">
+                Discard
+              </button>
+              <button
+                onClick={handleKeep}
+                className="flex items-center gap-1.5 rounded px-3 py-1.5 text-xs bg-neutral-700 hover:bg-neutral-600 text-neutral-200"
+              >
+                <FileCode size={11} />
+                Keep
+              </button>
+              <button
+                onClick={handleRunNow}
+                className="flex items-center gap-1.5 rounded px-3 py-1.5 text-xs font-medium bg-emerald-700 hover:bg-emerald-600 text-white"
+              >
+                <Play size={11} />
+                Run Now
               </button>
             </div>
           </>
@@ -741,6 +925,58 @@ export function SilkPanel({ onToast }: SilkPanelProps) {
     [onToast],
   );
 
+  /**
+   * "Run Now" bridge: stop the codegen session, save the spec, and immediately
+   * run it.  This wires the record->run loop so a recorded spec is never discarded.
+   */
+  const handleRecordRunNow = useCallback(
+    async (sessionId: string, framework: string) => {
+      setShowRecordDialog(false);
+      if (!browsersInstalled) {
+        setShowInstallDialog(true);
+        return;
+      }
+      setRunning(true);
+      try {
+        const result = await sidecar.silkRecordSaveAndRun({
+          session_id: sessionId,
+          framework,
+          filename: "recorded",
+          browsers: ["chromium"],
+        });
+        const traceUrl = result.run.trace_path
+          ? await sidecar.silkTraceUrl(result.run.run_id)
+          : undefined;
+        const entry: SessionRun = {
+          run: result.run,
+          specLabel: result.spec_path.split("/").pop() ?? result.spec_path,
+          startedAt: Date.now(),
+          traceUrl,
+        };
+        setSessionRuns((prev) => [entry, ...prev]);
+        setSelectedRunId(result.run.run_id);
+        setActiveBrowser("chromium");
+        setActiveTab("timeline");
+
+        if (result.run.failed > 0 || result.run.exit_code !== 0) {
+          onToast?.("error", `Silk: ${result.run.failed} failed`);
+        } else {
+          onToast?.("success", `Silk: ${result.run.passed} passed`);
+        }
+
+        void loadHistory();
+      } catch (e: unknown) {
+        onToast?.(
+          "error",
+          `Record+run error: ${e instanceof Error ? e.message : String(e)}`,
+        );
+      } finally {
+        setRunning(false);
+      }
+    },
+    [browsersInstalled, onToast, loadHistory],
+  );
+
   const handleNewTestSaved = useCallback(
     (specPath: string) => {
       onToast?.("success", `Test uložen: ${specPath}`);
@@ -787,6 +1023,7 @@ export function SilkPanel({ onToast }: SilkPanelProps) {
       {showRecordDialog && (
         <RecordDialog
           onCapture={handleCaptureSpec}
+          onRunNow={(sessionId, framework) => void handleRecordRunNow(sessionId, framework)}
           onCancel={() => setShowRecordDialog(false)}
         />
       )}
@@ -1080,29 +1317,96 @@ export function SilkPanel({ onToast }: SilkPanelProps) {
                 </div>
               )}
 
-              {activeTab === "network" && (
-                <div className="flex items-center justify-center h-full text-xs text-neutral-600 flex-col gap-2">
-                  <Globe size={20} className="text-neutral-700" />
-                  Network log available in Playwright trace
-                  {selectedSession?.traceUrl && (
-                    <a
-                      href={selectedSession.traceUrl}
-                      download={`trace-${selectedRun?.run_id}.zip`}
-                      className="flex items-center gap-1 text-xs text-emerald-400 hover:text-emerald-300"
-                    >
-                      <Download size={11} />
-                      Download trace
-                    </a>
-                  )}
-                </div>
-              )}
+              {activeTab === "network" && (() => {
+                const activeReport = browserResult?.json_report ?? selectedRun?.json_report ?? null;
+                const networkEntries = extractNetworkEntries(activeReport);
+                if (networkEntries.length === 0) {
+                  return (
+                    <div className="flex items-center justify-center h-full text-xs text-neutral-600 flex-col gap-2">
+                      <Globe size={20} className="text-neutral-700" />
+                      {activeReport ? "No network entries in report" : "Network log available in Playwright trace"}
+                      {selectedSession?.traceUrl && (
+                        <a
+                          href={selectedSession.traceUrl}
+                          download={`trace-${selectedRun?.run_id}.zip`}
+                          className="flex items-center gap-1 text-xs text-emerald-400 hover:text-emerald-300"
+                        >
+                          <Download size={11} />
+                          Download trace
+                        </a>
+                      )}
+                    </div>
+                  );
+                }
+                return (
+                  <div className="flex flex-col overflow-y-auto h-full">
+                    <div className="px-3 py-1.5 border-b border-neutral-800 text-[10px] text-neutral-500">
+                      {networkEntries.length} request(s)
+                    </div>
+                    {networkEntries.map((entry, i) => {
+                      const req = entry.request ?? {};
+                      const res = (entry as Record<string, unknown>).response as Record<string, unknown> | undefined;
+                      const status = res?.status as number | undefined;
+                      const statusColor = !status ? "text-neutral-500"
+                        : status < 300 ? "text-emerald-400"
+                        : status < 400 ? "text-amber-400"
+                        : "text-red-400";
+                      return (
+                        <div key={i} className="flex items-center gap-2 px-3 py-1.5 border-b border-neutral-900 text-[10px] hover:bg-neutral-900 min-w-0">
+                          <span className="shrink-0 w-8 font-mono text-neutral-400">{req.method ?? "?"}</span>
+                          <span className={`shrink-0 w-8 font-mono ${statusColor}`}>{status ?? ""}</span>
+                          <span className="flex-1 text-neutral-300 truncate font-mono" title={String(req.url ?? "")}>
+                            {String(req.url ?? "")}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })()}
 
-              {activeTab === "screenshots" && (
-                <div className="flex items-center justify-center h-full text-xs text-neutral-600 flex-col gap-2">
-                  <Image size={20} className="text-neutral-700" />
-                  Screenshots captured during run
-                </div>
-              )}
+              {activeTab === "screenshots" && (() => {
+                const activeReport = browserResult?.json_report ?? selectedRun?.json_report ?? null;
+                const screenshotPaths = extractScreenshotPaths(activeReport);
+                if (screenshotPaths.length === 0) {
+                  return (
+                    <div className="flex items-center justify-center h-full text-xs text-neutral-600 flex-col gap-2">
+                      <Image size={20} className="text-neutral-700" />
+                      {activeReport ? "No screenshots in report" : "Screenshots captured during run"}
+                    </div>
+                  );
+                }
+                return (
+                  <div className="flex flex-col gap-2 overflow-y-auto p-2 h-full">
+                    {screenshotPaths.map((p, i) => (
+                      <div key={i} className="rounded border border-neutral-800 bg-neutral-900 p-2">
+                        <div className="flex items-center justify-between gap-2 mb-1.5">
+                          <span className="text-[10px] text-neutral-400 font-mono truncate flex-1" title={p}>
+                            {p.split("/").pop() ?? p}
+                          </span>
+                          <a
+                            href={`file://${p}`}
+                            target="_blank"
+                            rel="noreferrer"
+                            title={p}
+                            className="shrink-0 text-neutral-500 hover:text-emerald-400 transition-colors"
+                          >
+                            <ExternalLink size={11} />
+                          </a>
+                        </div>
+                        <img
+                          src={`file://${p}`}
+                          alt={`screenshot-${i}`}
+                          className="w-full rounded object-contain max-h-48 bg-neutral-950"
+                          onError={(e) => {
+                            (e.target as HTMLImageElement).style.display = "none";
+                          }}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                );
+              })()}
             </div>
           </div>
         </div>
