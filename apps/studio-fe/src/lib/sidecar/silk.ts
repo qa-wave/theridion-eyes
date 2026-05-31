@@ -309,6 +309,30 @@ export interface SilkRunHistoryEntry {
   json_report?: Record<string, unknown> | null;
 }
 
+// ---- Publish config ----
+
+/** Response from GET /api/silk/publish-config.  Tokens are never returned. */
+export interface SilkPublishConfigOut {
+  weave_url: string;
+  /** True when a Weave token is stored (value is masked). */
+  weave_token_set: boolean;
+  hub_url: string;
+  /** True when a Hub token is stored (value is masked). */
+  hub_token_set: boolean;
+  enabled: boolean;
+}
+
+/** Body for PUT /api/silk/publish-config. */
+export interface SilkPublishConfigIn {
+  weave_url?: string;
+  /** Pass the real token to update it; pass empty string to keep existing. */
+  weave_token?: string;
+  hub_url?: string;
+  /** Pass the real token to update it; pass empty string to keep existing. */
+  hub_token?: string;
+  enabled?: boolean;
+}
+
 // ---- Methods ----------------------------------------------------------------
 
 export const silkMethods = {
@@ -451,6 +475,21 @@ export const silkMethods = {
   ): Promise<SilkRecordSaveAndRunOutput> {
     return call<SilkRecordSaveAndRunOutput>("/api/silk/record/save-and-run", {
       method: "POST",
+      body: JSON.stringify(input),
+    });
+  },
+
+  // ---- Publish config ----
+
+  /** Fetch the current publish config (tokens are masked — not returned). */
+  silkGetPublishConfig(): Promise<SilkPublishConfigOut> {
+    return call<SilkPublishConfigOut>("/api/silk/publish-config");
+  },
+
+  /** Save publish config.  Pass empty weave_token / hub_token to keep existing. */
+  silkPutPublishConfig(input: SilkPublishConfigIn): Promise<SilkPublishConfigOut> {
+    return call<SilkPublishConfigOut>("/api/silk/publish-config", {
+      method: "PUT",
       body: JSON.stringify(input),
     });
   },

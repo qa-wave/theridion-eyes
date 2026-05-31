@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from "react";
-import { Check, Globe, Info, Keyboard, Loader2, Monitor, Plus, Radio, Server, Settings2, Sparkles, Trash2, X } from "lucide-react";
+import { Check, Globe, Info, Keyboard, Loader2, Monitor, Plus, Radio, Server, Settings2, Share2, Sparkles, Trash2, X } from "lucide-react";
 import { sidecar } from "../lib/sidecar";
+import type { SilkPublishConfigOut } from "../lib/sidecar";
 import { pingHub } from "../lib/sidecar/hub";
 import { THEMES, applyTheme, loadTheme, type ThemeId } from "../state/theme";
 import { useFocusTrap } from "../hooks/useFocusTrap";
 
-type Tab = "general" | "ai" | "editor" | "proxy" | "hub" | "shortcuts" | "about";
+type Tab = "general" | "ai" | "editor" | "proxy" | "hub" | "publish" | "shortcuts" | "about";
 
 const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
   { id: "general", label: "General", icon: <Settings2 className="h-3.5 w-3.5" /> },
@@ -13,6 +14,7 @@ const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
   { id: "editor", label: "Editor", icon: <Monitor className="h-3.5 w-3.5" /> },
   { id: "proxy", label: "Proxy", icon: <Radio className="h-3.5 w-3.5" /> },
   { id: "hub", label: "Hub", icon: <Server className="h-3.5 w-3.5" /> },
+  { id: "publish", label: "Publikování", icon: <Share2 className="h-3.5 w-3.5" /> },
   { id: "shortcuts", label: "Shortcuts", icon: <Keyboard className="h-3.5 w-3.5" /> },
   { id: "about", label: "About", icon: <Info className="h-3.5 w-3.5" /> },
 ];
@@ -372,6 +374,9 @@ export function SettingsModal({ open, onClose }: Props) {
               </div>
             )}
 
+            {/* ---- Publikování výsledků ---- */}
+            {tab === "publish" && <PublishConfigPanel />}
+
             {/* ---- Shortcuts ---- */}
             {tab === "shortcuts" && (
               <div className="space-y-1">
@@ -440,6 +445,197 @@ function Shortcut({ keys, action }: { keys: string; action: string }) {
       <kbd className="rounded-md border border-glass bg-neutral-900/50 px-2 py-0.5 font-mono text-[10px] text-neutral-400 shadow-inner-glow">
         {keys}
       </kbd>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Publish config panel
+// ---------------------------------------------------------------------------
+
+const _MASKED = "••••••••••••••••";
+
+function PublishConfigPanel() {
+  const [weaveUrl, setWeaveUrl] = useState("");
+  const [weaveToken, setWeaveToken] = useState("");
+  const [hubUrl, setHubUrl] = useState("");
+  const [hubToken, setHubToken] = useState("");
+  const [enabled, setEnabled] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [savedMsg, setSavedMsg] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Tracks which token fields were originally set so we can show masked placeholder
+  // and preserve them when the user saves without changing the token.
+  const [weaveTokenSet, setWeaveTokenSet] = useState(false);
+  const [hubTokenSet, setHubTokenSet] = useState(false);
+
+  useEffect(() => {
+    setLoading(true);
+    sidecar
+      .silkGetPublishConfig()
+      .then((cfg: SilkPublishConfigOut) => {
+        setWeaveUrl(cfg.weave_url);
+        setWeaveToken("");
+        setWeaveTokenSet(cfg.weave_token_set);
+        setHubUrl(cfg.hub_url);
+        setHubToken("");
+        setHubTokenSet(cfg.hub_token_set);
+        setEnabled(cfg.enabled);
+      })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, []);
+
+  async function save() {
+    setSaving(true);
+    setError(null);
+    try {
+      const res = await sidecar.silkPutPublishConfig({
+        weave_url: weaveUrl.trim(),
+        // Empty string = preserve existing token on the server side.
+        weave_token: weaveToken,
+        hub_url: hubUrl.trim(),
+        hub_token: hubToken,
+        enabled,
+      });
+      setWeaveUrl(res.weave_url);
+      setWeaveToken("");
+      setWeaveTokenSet(res.weave_token_set);
+      setHubUrl(res.hub_url);
+      setHubToken("");
+      setHubTokenSet(res.hub_token_set);
+      setEnabled(res.enabled);
+      setSavedMsg(true);
+      setTimeout(() => setSavedMsg(false), 1500);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Uložení selhalo");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const inputClass =
+    "w-full rounded-md border border-glass bg-neutral-900/50 px-3 py-1.5 text-xs text-neutral-100 placeholder-neutral-600 focus:border-cobweb-500/40 focus:outline-none";
+  const labelClass = "mb-1 block text-[10px] uppercase tracking-widest text-neutral-500";
+
+  if (loading) {
+    return <p className="text-[11px] text-neutral-500">Načítání...</p>;
+  }
+
+  return (
+    <div className="space-y-5">
+      <Section title="Publikování výsledků">
+        <p className="mb-3 text-[11px] text-neutral-500">
+          Po každém spuštění testu jsou výsledky automaticky odesílány na Weave
+          (nebo Hub). Zkopírujte Ingest URL a token z nastavení Weave a vložte
+          je sem.
+        </p>
+
+        <label className="mb-4 flex items-center gap-2 text-xs text-neutral-300">
+          <input
+            type="checkbox"
+            checked={enabled}
+            onChange={(e) => setEnabled(e.target.checked)}
+            className="h-3.5 w-3.5 cursor-pointer accent-cobweb-500"
+          />
+          Povolit publikování výsledků
+        </label>
+      </Section>
+
+      <Section title="Weave Ingest">
+        <div className="space-y-3">
+          <div>
+            <label className={labelClass}>Ingest URL</label>
+            <input
+              value={weaveUrl}
+              onChange={(e) => setWeaveUrl(e.target.value)}
+              placeholder="https://weave.example.com/api/runs/ingest"
+              className={inputClass}
+              spellCheck={false}
+              autoComplete="off"
+            />
+          </div>
+          <div>
+            <label className={labelClass}>Token</label>
+            <input
+              type="password"
+              value={weaveToken}
+              onChange={(e) => setWeaveToken(e.target.value)}
+              placeholder={weaveTokenSet ? _MASKED : "Vložte token z Weave Settings"}
+              className={inputClass}
+              autoComplete="new-password"
+            />
+            {weaveTokenSet && !weaveToken && (
+              <p className="mt-0.5 text-[10px] text-neutral-600">
+                Token je uložen. Ponechte prázdné pro zachování stávajícího.
+              </p>
+            )}
+          </div>
+        </div>
+      </Section>
+
+      <Section title="Hub Ingest (volitelné)">
+        <div className="space-y-3">
+          <div>
+            <label className={labelClass}>Hub URL</label>
+            <input
+              value={hubUrl}
+              onChange={(e) => setHubUrl(e.target.value)}
+              placeholder="https://hub.example.com/api/ingest"
+              className={inputClass}
+              spellCheck={false}
+              autoComplete="off"
+            />
+          </div>
+          <div>
+            <label className={labelClass}>Token</label>
+            <input
+              type="password"
+              value={hubToken}
+              onChange={(e) => setHubToken(e.target.value)}
+              placeholder={hubTokenSet ? _MASKED : "Vložte Hub token (volitelné)"}
+              className={inputClass}
+              autoComplete="new-password"
+            />
+            {hubTokenSet && !hubToken && (
+              <p className="mt-0.5 text-[10px] text-neutral-600">
+                Token je uložen. Ponechte prázdné pro zachování stávajícího.
+              </p>
+            )}
+          </div>
+        </div>
+      </Section>
+
+      {error && (
+        <p className="rounded-md border border-rose-500/30 bg-rose-950/20 px-3 py-2 text-[11px] text-rose-400">
+          {error}
+        </p>
+      )}
+
+      <div className="flex justify-end">
+        <button
+          type="button"
+          onClick={() => void save()}
+          disabled={saving}
+          className="bg-accent-gradient inline-flex items-center gap-1.5 rounded-md px-4 py-1.5 text-xs font-medium text-white shadow-glow-sm transition disabled:opacity-40 disabled:shadow-none"
+        >
+          {savedMsg ? (
+            <><Check className="h-3.5 w-3.5" /> Uloženo</>
+          ) : saving ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          ) : (
+            "Uložit"
+          )}
+        </button>
+      </div>
+
+      <div className="rounded-md border border-glass bg-neutral-900/20 px-3 py-2 text-[11px] text-neutral-500">
+        Tokeny jsou ukládány lokálně v zašifrovaném úložišti sidecaru
+        (<span className="font-mono text-cobweb-400">~/.theridion/publish-config.json</span>).
+        Nikdy nejsou logovány ani odesílány jinam než na nakonfigurované URL.
+      </div>
     </div>
   );
 }

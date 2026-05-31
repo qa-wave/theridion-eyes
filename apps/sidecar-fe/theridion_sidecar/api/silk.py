@@ -38,6 +38,7 @@ from pathlib import Path
 from typing import AsyncGenerator
 from urllib.parse import urlparse
 
+import httpx as _httpx
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
@@ -45,6 +46,7 @@ from pydantic import BaseModel, Field
 from .. import storage
 from .. import silk_storage
 from .. import silk_transpile
+from .. import publish_config as _pub_cfg
 from . import silk_frameworks
 
 router = APIRouter(prefix="/api/silk", tags=["silk"])
@@ -1434,17 +1436,30 @@ async def _publish_run_result_v2(
 ) -> None:
     """Publish a RunResult v2 payload to Hub and Weave (best-effort).
 
-    Reads target URLs and token from environment:
-      EYES_HUB_URL   — Hub /api/ingest endpoint (optional)
-      EYES_WEAVE_URL — Weave /api/runs/ingest endpoint (optional)
-      EYES_TOKEN     — Bearer token for both endpoints (optional)
+    Resolution order for each target:
+      1. Persisted publish config (set via PUT /api/silk/publish-config).
+      2. Legacy env-var fallback:
+           EYES_WEAVE_URL / EYES_HUB_URL / EYES_TOKEN
 
-    If neither env var is set, this is a no-op.  Failures are silently
-    swallowed — this is explicitly best-effort and must never block the run.
+    When the persisted config is ``enabled=True`` and a URL is set, it takes
+    priority over the env vars.  When the config is ``enabled=False`` *and* no
+    env vars are set, this is a no-op.  Tokens are never logged.
     """
-    hub_url = os.environ.get("EYES_HUB_URL", "").rstrip("/")
-    weave_url = os.environ.get("EYES_WEAVE_URL", "").rstrip("/")
-    token = os.environ.get("EYES_TOKEN", "")
+    cfg = _pub_cfg.load()
+
+    # Persisted config takes priority when enabled and has at least one URL.
+    if cfg.enabled and (cfg.weave_url or cfg.hub_url):
+        weave_url = cfg.weave_url
+        weave_token = cfg.weave_token
+        hub_url = cfg.hub_url
+        hub_token = cfg.hub_token
+    else:
+        # Legacy env-var fallback (single shared token for both).
+        weave_url = os.environ.get("EYES_WEAVE_URL", "").rstrip("/")
+        hub_url = os.environ.get("EYES_HUB_URL", "").rstrip("/")
+        env_token = os.environ.get("EYES_TOKEN", "")
+        weave_token = env_token
+        hub_token = env_token
 
     if not hub_url and not weave_url:
         return
@@ -1509,26 +1524,26 @@ async def _publish_run_result_v2(
         "requests": requests_list,
     }
 
-    headers: dict[str, str] = {
+    # Build per-target (url, token) pairs — different tokens may be configured.
+    targets: list[tuple[str, str]] = []
+    if hub_url:
+        targets.append((f"{hub_url}/api/ingest", hub_token))
+    if weave_url:
+        targets.append((f"{weave_url}/api/runs/ingest", weave_token))
+
+    base_headers: dict[str, str] = {
         "Content-Type": "application/json",
         "Idempotency-Key": run_id,
     }
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
-
-    import httpx as _httpx
-
-    targets = []
-    if hub_url:
-        targets.append(f"{hub_url}/api/ingest")
-    if weave_url:
-        targets.append(f"{weave_url}/api/runs/ingest")
 
     try:
         async with _httpx.AsyncClient(timeout=10.0) as client:
-            for url in targets:
+            for url, tok in targets:
                 try:
-                    await client.post(url, json=payload, headers=headers)
+                    h = dict(base_headers)
+                    if tok:
+                        h["Authorization"] = f"Bearer {tok}"
+                    await client.post(url, json=payload, headers=h)
                 except Exception:
                     pass  # Best-effort — individual endpoint failure is silent.
     except Exception:
@@ -2290,7 +2305,76 @@ async def record_save_and_run(body: RecordSaveAndRunInput) -> RecordSaveAndRunOu
 
 
 # ---------------------------------------------------------------------------
-# 10. Run history
+# 10. Publish config — GET + PUT /api/silk/publish-config
+# ---------------------------------------------------------------------------
+
+
+class PublishConfigOut(BaseModel):
+    """Response model for the publish config — tokens are masked on read."""
+
+    weave_url: str
+    weave_token_set: bool = Field(
+        description="True when a Weave token has been stored (value is not returned)."
+    )
+    hub_url: str
+    hub_token_set: bool = Field(
+        description="True when a Hub token has been stored (value is not returned)."
+    )
+    enabled: bool
+
+
+class PublishConfigIn(BaseModel):
+    """Request body for updating the publish config."""
+
+    weave_url: str = Field(default="")
+    weave_token: str = Field(default="")
+    hub_url: str = Field(default="")
+    hub_token: str = Field(default="")
+    enabled: bool = Field(default=False)
+
+
+def _to_out(cfg: "_pub_cfg.PublishConfig") -> PublishConfigOut:
+    return PublishConfigOut(
+        weave_url=cfg.weave_url,
+        weave_token_set=bool(cfg.weave_token),
+        hub_url=cfg.hub_url,
+        hub_token_set=bool(cfg.hub_token),
+        enabled=cfg.enabled,
+    )
+
+
+@router.get("/publish-config", response_model=PublishConfigOut)
+def get_publish_config() -> PublishConfigOut:
+    """Return the current publish config (tokens masked — never returned in plain text)."""
+    return _to_out(_pub_cfg.load())
+
+
+@router.put("/publish-config", response_model=PublishConfigOut)
+def put_publish_config(body: PublishConfigIn) -> PublishConfigOut:
+    """Persist publish config.
+
+    Empty strings leave the corresponding URL/token cleared.
+    Tokens are stored at rest but never logged.
+    """
+    existing = _pub_cfg.load()
+
+    # Preserve existing token when caller sends an empty string (masked value).
+    weave_token = body.weave_token if body.weave_token else existing.weave_token
+    hub_token = body.hub_token if body.hub_token else existing.hub_token
+
+    cfg = _pub_cfg.PublishConfig(
+        weave_url=body.weave_url.rstrip("/"),
+        weave_token=weave_token,
+        hub_url=body.hub_url.rstrip("/"),
+        hub_token=hub_token,
+        enabled=body.enabled,
+    )
+    _pub_cfg.save(cfg)
+    return _to_out(cfg)
+
+
+# ---------------------------------------------------------------------------
+# 11. Run history
 # ---------------------------------------------------------------------------
 
 
