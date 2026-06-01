@@ -9,6 +9,13 @@ initialised.  The seed is gated to the real home directory (``~/.theridion``);
 when tests override ``THERIDION_HOME`` via env-var the fake tmp_path is always
 empty so this code is never reached (``maybe_seed()`` returns immediately when
 the DB already has rows or when it detects a non-default home).
+
+v2 additions (marker ``.seed_v2``):
+- Environments (Production, Staging, Local-dev) with realistic variables
+- Global variables (globals.json)
+- Request history entries (history.jsonl)
+- Screenshot PNGs seeded into silk/runs/<id>/screenshots/ (linked in runs)
+- Visual-regression baseline PNGs + .approved.json metadata
 """
 
 from __future__ import annotations
@@ -16,7 +23,9 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
+import struct
 import uuid
+import zlib
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -27,6 +36,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 _SEED_MARKER = ".silk_seed_v1"  # Written to silk dir after first seed run.
+_SEED_MARKER_V2 = ".seed_v2"    # Written to home dir after v2 seed run.
 
 
 # ---------------------------------------------------------------------------
@@ -789,6 +799,439 @@ def _write_collections(collections: list[dict]) -> None:
 
 
 # ---------------------------------------------------------------------------
+# v2 seed data: environments
+# ---------------------------------------------------------------------------
+
+_ENV_IDS = {
+    "production":  "c3d4e5f6-0001-0001-0001-000000000001",
+    "staging":     "c3d4e5f6-0001-0001-0001-000000000002",
+    "local":       "c3d4e5f6-0001-0001-0001-000000000003",
+}
+
+
+def _build_seed_environments() -> list[dict]:
+    return [
+        {
+            "id": _ENV_IDS["production"],
+            "name": "Production",
+            "variables": [
+                {"name": "BASE_URL",      "value": "https://app.example.com",         "enabled": True},
+                {"name": "API_URL",       "value": "https://api.example.com/v1",       "enabled": True},
+                {"name": "AUTH_TOKEN",    "value": "prod-token-abc123",                "enabled": True},
+                {"name": "TIMEOUT_MS",    "value": "10000",                            "enabled": True},
+                {"name": "DEBUG",         "value": "false",                            "enabled": True},
+            ],
+        },
+        {
+            "id": _ENV_IDS["staging"],
+            "name": "Staging",
+            "variables": [
+                {"name": "BASE_URL",      "value": "https://staging.example.com",      "enabled": True},
+                {"name": "API_URL",       "value": "https://api.staging.example.com/v1","enabled": True},
+                {"name": "AUTH_TOKEN",    "value": "staging-token-xyz789",             "enabled": True},
+                {"name": "TIMEOUT_MS",    "value": "15000",                            "enabled": True},
+                {"name": "DEBUG",         "value": "true",                             "enabled": True},
+                {"name": "FEATURE_FLAG",  "value": "checkout-v2",                     "enabled": True},
+            ],
+        },
+        {
+            "id": _ENV_IDS["local"],
+            "name": "Local-dev",
+            "variables": [
+                {"name": "BASE_URL",      "value": "http://localhost:3000",            "enabled": True},
+                {"name": "API_URL",       "value": "http://localhost:4000/v1",         "enabled": True},
+                {"name": "AUTH_TOKEN",    "value": "dev-token-local",                  "enabled": True},
+                {"name": "TIMEOUT_MS",    "value": "30000",                            "enabled": True},
+                {"name": "DEBUG",         "value": "true",                             "enabled": True},
+                {"name": "MOCK_STRIPE",   "value": "true",                             "enabled": True},
+            ],
+        },
+    ]
+
+
+def _write_environments(envs: list[dict]) -> None:
+    """Write environment JSON files idempotently."""
+    from . import environments as _envs
+    import os
+    import tempfile
+
+    envs_dir = _envs.envs_dir()
+    for env in envs:
+        dest = envs_dir / f"{env['id']}.json"
+        if dest.exists():
+            continue
+        fd, tmp = tempfile.mkstemp(
+            prefix=env["id"] + ".", suffix=".json.tmp", dir=str(envs_dir)
+        )
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(env, f, indent=2, ensure_ascii=False)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, dest)
+        except Exception:
+            Path(tmp).unlink(missing_ok=True)
+            raise
+
+
+# ---------------------------------------------------------------------------
+# v2 seed data: global variables
+# ---------------------------------------------------------------------------
+
+
+def _build_seed_globals() -> dict:
+    return {
+        "variables": [
+            {"name": "COMPANY_NAME",  "value": "Example Corp",             "enabled": True},
+            {"name": "SUPPORT_EMAIL", "value": "support@example.com",      "enabled": True},
+            {"name": "APP_VERSION",   "value": "2.4.1",                    "enabled": True},
+            {"name": "DEFAULT_LANG",  "value": "en",                       "enabled": True},
+        ]
+    }
+
+
+def _write_globals(data: dict) -> None:
+    """Write globals.json idempotently."""
+    from . import storage as _storage
+    import os
+    import tempfile
+
+    dest = _storage.home_dir() / "globals.json"
+    if dest.exists():
+        return
+    fd, tmp = tempfile.mkstemp(prefix="globals.", suffix=".json.tmp",
+                               dir=str(_storage.home_dir()))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, dest)
+    except Exception:
+        Path(tmp).unlink(missing_ok=True)
+        raise
+
+
+# ---------------------------------------------------------------------------
+# v2 seed data: request history (history.jsonl)
+# ---------------------------------------------------------------------------
+
+_HISTORY_IDS = [
+    "d4e5f6a7-0001-0001-0001-000000000001",
+    "d4e5f6a7-0001-0001-0001-000000000002",
+    "d4e5f6a7-0001-0001-0001-000000000003",
+    "d4e5f6a7-0001-0001-0001-000000000004",
+    "d4e5f6a7-0001-0001-0001-000000000005",
+    "d4e5f6a7-0001-0001-0001-000000000006",
+    "d4e5f6a7-0001-0001-0001-000000000007",
+    "d4e5f6a7-0001-0001-0001-000000000008",
+]
+
+
+def _ts_epoch(days_ago: float, hour: int = 12, minute: int = 0) -> float:
+    """Return a Unix epoch float for a timestamp n days in the past."""
+    base = datetime.now(tz=timezone.utc).replace(
+        hour=hour, minute=minute, second=0, microsecond=0
+    )
+    return (base - timedelta(days=days_ago)).timestamp()
+
+
+def _build_seed_history() -> list[dict]:
+    return [
+        {
+            "id": _HISTORY_IDS[0],
+            "method": "GET",
+            "url": "https://api.example.com/v1/users/me",
+            "status": 200,
+            "elapsed_ms": 134.5,
+            "timestamp": _ts_epoch(0.01, hour=9, minute=22),
+            "request_body": None,
+            "response_body": '{"id":"usr_01","email":"alice@example.com","name":"Alice Doe","role":"admin"}',
+            "request_headers": {"Authorization": "Bearer prod-token-abc123", "Accept": "application/json"},
+            "response_headers": {"Content-Type": "application/json", "X-Request-Id": "req-001"},
+        },
+        {
+            "id": _HISTORY_IDS[1],
+            "method": "POST",
+            "url": "https://api.example.com/v1/auth/login",
+            "status": 200,
+            "elapsed_ms": 287.3,
+            "timestamp": _ts_epoch(0.02, hour=9, minute=15),
+            "request_body": '{"email":"alice@example.com","password":"•••••••••"}',
+            "response_body": '{"access_token":"eyJhbGciOiJIUzI1NiJ9.example","expires_in":3600}',
+            "request_headers": {"Content-Type": "application/json"},
+            "response_headers": {"Content-Type": "application/json", "Set-Cookie": "session=abc; HttpOnly"},
+        },
+        {
+            "id": _HISTORY_IDS[2],
+            "method": "GET",
+            "url": "https://api.example.com/v1/dashboard/metrics",
+            "status": 200,
+            "elapsed_ms": 412.8,
+            "timestamp": _ts_epoch(0.5, hour=14, minute=5),
+            "request_body": None,
+            "response_body": '{"total_users":12480,"revenue_usd":84320.50,"conversion_rate":0.034}',
+            "request_headers": {"Authorization": "Bearer prod-token-abc123"},
+            "response_headers": {"Content-Type": "application/json", "Cache-Control": "max-age=60"},
+        },
+        {
+            "id": _HISTORY_IDS[3],
+            "method": "POST",
+            "url": "https://api.example.com/v1/checkout/sessions",
+            "status": 201,
+            "elapsed_ms": 623.1,
+            "timestamp": _ts_epoch(1.0, hour=11, minute=30),
+            "request_body": '{"items":[{"sku":"PRO-12M","qty":1}],"currency":"USD"}',
+            "response_body": '{"session_id":"cs_test_abc123","url":"https://checkout.stripe.com/pay/cs_test_abc123","expires_at":1735000000}',
+            "request_headers": {"Content-Type": "application/json", "Authorization": "Bearer prod-token-abc123"},
+            "response_headers": {"Content-Type": "application/json", "Location": "/checkout/cs_test_abc123"},
+        },
+        {
+            "id": _HISTORY_IDS[4],
+            "method": "GET",
+            "url": "https://api.example.com/v1/users?page=1&limit=20",
+            "status": 200,
+            "elapsed_ms": 198.4,
+            "timestamp": _ts_epoch(1.5, hour=16, minute=0),
+            "request_body": None,
+            "response_body": '{"data":[{"id":"usr_01","email":"alice@example.com"},{"id":"usr_02","email":"bob@example.com"}],"total":2,"page":1}',
+            "request_headers": {"Authorization": "Bearer prod-token-abc123"},
+            "response_headers": {"Content-Type": "application/json"},
+        },
+        {
+            "id": _HISTORY_IDS[5],
+            "method": "PATCH",
+            "url": "https://api.example.com/v1/users/usr_01/settings",
+            "status": 422,
+            "elapsed_ms": 89.7,
+            "timestamp": _ts_epoch(2.0, hour=10, minute=45),
+            "request_body": '{"notification_email":"invalid-email"}',
+            "response_body": '{"detail":"Validation failed","errors":[{"field":"notification_email","msg":"Not a valid email address"}]}',
+            "request_headers": {"Content-Type": "application/json", "Authorization": "Bearer prod-token-abc123"},
+            "response_headers": {"Content-Type": "application/json"},
+        },
+        {
+            "id": _HISTORY_IDS[6],
+            "method": "DELETE",
+            "url": "https://api.example.com/v1/sessions/sess_xyz",
+            "status": 204,
+            "elapsed_ms": 67.2,
+            "timestamp": _ts_epoch(3.0, hour=17, minute=55),
+            "request_body": None,
+            "response_body": None,
+            "request_headers": {"Authorization": "Bearer prod-token-abc123"},
+            "response_headers": {},
+        },
+        {
+            "id": _HISTORY_IDS[7],
+            "method": "GET",
+            "url": "https://api.example.com/v1/notifications?unread=true",
+            "status": 200,
+            "elapsed_ms": 156.9,
+            "timestamp": _ts_epoch(5.0, hour=9, minute=8),
+            "request_body": None,
+            "response_body": '{"notifications":[{"id":"n1","title":"Deployment succeeded","read":false},{"id":"n2","title":"New user signup","read":false}],"total":2}',
+            "request_headers": {"Authorization": "Bearer prod-token-abc123"},
+            "response_headers": {"Content-Type": "application/json"},
+        },
+    ]
+
+
+def _write_history(entries: list[dict]) -> None:
+    """Write history.jsonl idempotently (only if file does not exist)."""
+    from . import storage as _storage
+    import os
+    import tempfile
+
+    dest = _storage.home_dir() / "history.jsonl"
+    if dest.exists():
+        return
+    fd, tmp = tempfile.mkstemp(prefix="history.", suffix=".jsonl.tmp",
+                               dir=str(_storage.home_dir()))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            for entry in entries:
+                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, dest)
+    except Exception:
+        Path(tmp).unlink(missing_ok=True)
+        raise
+
+
+# ---------------------------------------------------------------------------
+# v2 seed data: screenshot PNGs and visual baseline PNGs
+# ---------------------------------------------------------------------------
+
+def _make_minimal_png(width: int = 4, height: int = 4,
+                       color: tuple[int, int, int] = (34, 197, 94)) -> bytes:
+    """Generate a minimal valid PNG from scratch (no Pillow needed).
+
+    Returns raw PNG bytes for a solid-colour RGB image of the given size.
+    Uses raw deflate via zlib so it works in pure Python with no deps.
+    """
+    r, g, b = color
+
+    # PNG signature
+    sig = b"\x89PNG\r\n\x1a\n"
+
+    def _chunk(tag: bytes, data: bytes) -> bytes:
+        length = struct.pack(">I", len(data))
+        body = tag + data
+        crc = struct.pack(">I", zlib.crc32(body) & 0xFFFFFFFF)
+        return length + body + crc
+
+    # IHDR: width, height, bit-depth=8, color-type=2 (RGB), compress=0, filter=0, interlace=0
+    ihdr_data = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
+    ihdr = _chunk(b"IHDR", ihdr_data)
+
+    # IDAT: raw image rows, each prefixed with filter byte 0 (None)
+    raw_rows = b""
+    for _ in range(height):
+        row = bytes([r, g, b] * width)
+        raw_rows += b"\x00" + row
+    compressed = zlib.compress(raw_rows, level=9)
+    idat = _chunk(b"IDAT", compressed)
+
+    # IEND
+    iend = _chunk(b"IEND", b"")
+
+    return sig + ihdr + idat + iend
+
+
+# Stable screenshot IDs that are cross-referenced back to silk run IDs.
+# run9  (a11y) → screenshot of homepage
+# run5  (dashboard) → screenshot of dashboard
+# run10 (login) → screenshot of login form
+_SCREENSHOT_DEFS = [
+    {
+        "run_id":   _RUN_IDS[8],   # run9 — a11y
+        "filename": "homepage-screenshot.png",
+        "color":    (99, 102, 241),   # indigo — homepage colour
+    },
+    {
+        "run_id":   _RUN_IDS[4],   # run5 — dashboard
+        "filename": "dashboard-screenshot.png",
+        "color":    (16, 185, 129),   # emerald — dashboard
+    },
+    {
+        "run_id":   _RUN_IDS[9],   # run10 — login
+        "filename": "login-form-screenshot.png",
+        "color":    (59, 130, 246),   # blue — login
+    },
+]
+
+# Visual-regression baseline definitions — one per test_id × browser × viewport.
+_BASELINE_DEFS = [
+    {
+        "test_id": "homepage passes axe audit",
+        "browser": "chromium",
+        "viewport": "1280x720",
+        "color": (99, 102, 241),
+        "approved_by": "alice@example.com",
+        "diff_ratio": 0.0,
+        "approved_at_offset": 0.5,   # days ago
+    },
+    {
+        "test_id": "homepage passes axe audit",
+        "browser": "firefox",
+        "viewport": "1280x720",
+        "color": (139, 92, 246),
+        "approved_by": "alice@example.com",
+        "diff_ratio": 0.0,
+        "approved_at_offset": 0.5,
+    },
+    {
+        "test_id": "loads checkout page",
+        "browser": "chromium",
+        "viewport": "1280x720",
+        "color": (245, 158, 11),
+        "approved_by": "bob@example.com",
+        "diff_ratio": 0.002,
+        "approved_at_offset": 2.0,
+    },
+    {
+        "test_id": "loads dashboard for authenticated user",
+        "browser": "chromium",
+        "viewport": "1440x900",
+        "color": (16, 185, 129),
+        "approved_by": "alice@example.com",
+        "diff_ratio": 0.0,
+        "approved_at_offset": 1.0,
+    },
+]
+
+
+def _baseline_filename(test_id: str, browser: str, viewport: str) -> str:
+    safe_id = test_id.replace("/", "_").replace(" ", "_")
+    safe_viewport = viewport.replace("x", "_")
+    return f"{safe_id}-{browser}-{safe_viewport}.png"
+
+
+def _write_screenshots(silk_dir: Path) -> None:
+    """Write demo screenshot PNGs into run sub-directories."""
+    for defn in _SCREENSHOT_DEFS:
+        run_dir = silk_dir / "runs" / defn["run_id"] / "screenshots"
+        run_dir.mkdir(parents=True, exist_ok=True)
+        dest = run_dir / defn["filename"]
+        if not dest.exists():
+            dest.write_bytes(_make_minimal_png(color=defn["color"]))
+
+
+def _write_baselines(silk_dir: Path) -> None:
+    """Write demo baseline PNGs and .approved.json metadata."""
+    baselines_dir = silk_dir / "baselines"
+    baselines_dir.mkdir(parents=True, exist_ok=True)
+    for defn in _BASELINE_DEFS:
+        fname = _baseline_filename(defn["test_id"], defn["browser"], defn["viewport"])
+        png_dest = baselines_dir / fname
+        meta_dest = baselines_dir / f"{fname}.approved.json"
+        approved_at = (
+            datetime.now(tz=timezone.utc) - timedelta(days=defn["approved_at_offset"])
+        ).isoformat()
+
+        if not png_dest.exists():
+            png_dest.write_bytes(_make_minimal_png(color=defn["color"]))
+
+        if not meta_dest.exists():
+            meta = {
+                "test_id": defn["test_id"],
+                "browser": defn["browser"],
+                "viewport": defn["viewport"],
+                "approved": True,
+                "approved_by": defn["approved_by"],
+                "approved_at": approved_at,
+                "diff_ratio": defn["diff_ratio"],
+                "candidate_path": str(png_dest),
+            }
+            meta_dest.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+
+
+def _patch_silk_runs_with_screenshots(silk_dir: Path) -> None:
+    """Back-fill screenshot_paths in the already-inserted silk_runs rows."""
+    db = silk_dir / "history.db"
+    if not db.exists():
+        return
+    with sqlite3.connect(str(db)) as conn:
+        conn.execute("PRAGMA journal_mode=WAL")
+        for defn in _SCREENSHOT_DEFS:
+            run_id = defn["run_id"]
+            screenshot_path = str(
+                silk_dir / "runs" / run_id / "screenshots" / defn["filename"]
+            )
+            # Only update if screenshots_paths is currently '[]' (empty).
+            conn.execute(
+                """
+                UPDATE silk_runs
+                SET screenshot_paths = ?
+                WHERE id = ? AND (screenshot_paths = '[]' OR screenshot_paths IS NULL)
+                """,
+                (json.dumps([screenshot_path]), run_id),
+            )
+
+
+# ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
 
@@ -798,32 +1241,79 @@ def maybe_seed() -> None:
     Skips seeding when:
     - The silk DB already contains runs (idempotent guard).
     - The silk-seed marker file is present (belt-and-suspenders).
+
+    After the v1 silk-run seed, also runs seed_all() for v2 data
+    (environments, globals, history, screenshots, baselines).
     """
     silk_dir = _silk_dir()
     marker = silk_dir / _SEED_MARKER
 
-    if marker.exists():
-        return  # Already seeded in a previous run.
+    if not marker.exists():
+        if _has_existing_runs():
+            # DB already populated — write marker so we skip faster next time.
+            marker.touch()
+        else:
+            logger.info("theridion-eyes: seeding demo history data...")
+            try:
+                runs = _build_seed_runs()
+                _write_silk_runs(runs)
 
-    if _has_existing_runs():
-        # DB already populated — write marker so we skip faster next time.
-        marker.touch()
-        return
+                specs_dir = silk_dir / "specs"
+                _write_spec_files(specs_dir)
 
-    logger.info("theridion-eyes: seeding demo history data...")
+                collections = _build_seed_collections()
+                _write_collections(collections)
+
+                marker.touch()
+                logger.info(
+                    "theridion-eyes: seed complete (%d runs, %d specs, %d collections).",
+                    len(runs), len(_SPEC_SOURCES), len(collections),
+                )
+            except Exception as exc:
+                # Seed failures must never crash the sidecar.
+                logger.warning("theridion-eyes: seed failed (non-fatal): %s", exc, exc_info=True)
+
+    # Always attempt v2 seed (idempotent — guarded by its own marker).
+    seed_all()
+
+
+def seed_all() -> None:
+    """Seed all non-silk-run data (environments, globals, history, baselines).
+
+    Idempotent: guarded by ``_SEED_MARKER_V2`` written to the home dir.
+    Safe to call on every startup — will no-op when already seeded.
+    """
+    from . import storage as _storage
+    home = _storage.home_dir()
+    marker_v2 = home / _SEED_MARKER_V2
+
+    if marker_v2.exists():
+        return  # Already seeded.
+
+    logger.info("theridion-eyes: running v2 seed (envs, globals, history, baselines)...")
     try:
-        runs = _build_seed_runs()
-        _write_silk_runs(runs)
+        # Environments
+        envs = _build_seed_environments()
+        _write_environments(envs)
 
-        specs_dir = silk_dir / "specs"
-        _write_spec_files(specs_dir)
+        # Global variables
+        _write_globals(_build_seed_globals())
 
-        collections = _build_seed_collections()
-        _write_collections(collections)
+        # Request history
+        _write_history(_build_seed_history())
 
-        marker.touch()
-        logger.info("theridion-eyes: seed complete (%d runs, %d specs, %d collections).",
-                    len(runs), len(_SPEC_SOURCES), len(collections))
+        # Screenshots — write PNGs and back-fill silk_runs rows
+        silk_dir = _silk_dir()
+        _write_screenshots(silk_dir)
+        _patch_silk_runs_with_screenshots(silk_dir)
+
+        # Visual regression baselines
+        _write_baselines(silk_dir)
+
+        marker_v2.touch()
+        logger.info(
+            "theridion-eyes: v2 seed complete (%d envs, history, %d baselines).",
+            len(envs), len(_BASELINE_DEFS),
+        )
     except Exception as exc:
-        # Seed failures must never crash the sidecar.
-        logger.warning("theridion-eyes: seed failed (non-fatal): %s", exc, exc_info=True)
+        logger.warning("theridion-eyes: v2 seed failed (non-fatal): %s", exc, exc_info=True)
