@@ -38,7 +38,7 @@ pub struct SidecarState {
 /// asynchronously inside a background task. Frontend code should poll
 /// `get_sidecar_port` until it returns Some.
 pub fn spawn(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
-    let sidecar = app.shell().sidecar("theridion-sidecar")?;
+    let sidecar = app.shell().sidecar("theridion-sidecar-fe")?;
     let (mut rx, _child) = sidecar.spawn()?;
 
     let app_handle = app.clone();
