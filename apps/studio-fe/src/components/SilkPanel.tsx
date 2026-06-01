@@ -13,6 +13,13 @@
  *   - A11y violations tab with impact badges
  *   - Approve baseline button in screenshot diff view
  *   - Network mocks section in run form
+ *
+ * Browser-demo mode:
+ *   When running outside Tauri (window.__TAURI_INTERNALS__ absent) OR when
+ *   the sidecar fetch fails, DEMO_REPORTS provides pre-bundled rich detail
+ *   data so Timeline/Network/Screenshots/A11y tabs are all populated.
+ *   The first DEMO_HISTORY run is auto-selected on load so the page is
+ *   never empty.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -39,7 +46,7 @@ import {
 import { EmptyState } from "./EmptyState";
 import { NewTestDialog } from "./NewTestDialog";
 import { sidecar } from "../lib/sidecar";
-import { getSidecarBaseUrl, getSidecarToken } from "../lib/sidecar/client";
+import { getSidecarBaseUrl, getSidecarToken, isTauri } from "../lib/sidecar/client";
 import { useT } from "../lib/i18n/context";
 import type {
   SilkA11yViolation,
@@ -292,6 +299,325 @@ const DEMO_HISTORY: SilkRunHistoryEntry[] = [
 ];
 
 // ---------------------------------------------------------------------------
+// Browser-demo mode detection
+// ---------------------------------------------------------------------------
+
+/** True when running outside Tauri without a reachable sidecar. */
+let _isBrowserDemo: boolean | null = null;
+
+function getBrowserDemoMode(): boolean {
+  if (_isBrowserDemo !== null) return _isBrowserDemo;
+  // Tauri is always real.
+  if (isTauri()) {
+    _isBrowserDemo = false;
+    return false;
+  }
+  // Plain browser — default to demo mode; will be flipped to false on first
+  // successful sidecar health response.
+  _isBrowserDemo = true;
+  return true;
+}
+
+/** Called when the sidecar responds successfully — disable demo mode for this session. */
+function disableBrowserDemo() {
+  _isBrowserDemo = false;
+}
+
+// ---------------------------------------------------------------------------
+// Demo screenshot thumbnails (inline SVG data-URIs, no file deps)
+// ---------------------------------------------------------------------------
+
+// Three small placeholder screenshots encoded as SVG data-URIs.
+// They mimic browser screenshots with a dark header bar + content region.
+
+function _svgThumb(
+  title: string,
+  bg: string,
+  accentLine: string,
+): string {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="400" height="240" viewBox="0 0 400 240">
+  <rect width="400" height="240" fill="#0f1014"/>
+  <rect x="0" y="0" width="400" height="28" fill="#1a1c22"/>
+  <circle cx="16" cy="14" r="5" fill="#ff5f57"/>
+  <circle cx="32" cy="14" r="5" fill="#febc2e"/>
+  <circle cx="48" cy="14" r="5" fill="#28c840"/>
+  <rect x="70" y="7" width="260" height="14" rx="7" fill="#26282e"/>
+  <text x="200" y="19" font-family="monospace" font-size="9" fill="#666" text-anchor="middle">app.acmecorp.io</text>
+  <rect x="12" y="40" width="376" height="${bg}" fill="#141418"/>
+  <rect x="12" y="42" width="376" height="3" fill="${accentLine}" opacity="0.7"/>
+  <rect x="20" y="55" width="120" height="8" rx="4" fill="#1e2028"/>
+  <rect x="20" y="71" width="80" height="6" rx="3" fill="#1a1c22"/>
+  <rect x="20" y="85" width="200" height="6" rx="3" fill="#1a1c22"/>
+  <rect x="20" y="99" width="160" height="6" rx="3" fill="#1a1c22"/>
+  <rect x="20" y="117" width="360" height="80" rx="6" fill="#1c1e24"/>
+  <rect x="32" y="129" width="80" height="6" rx="3" fill="#22262f"/>
+  <rect x="32" y="143" width="200" height="4" rx="2" fill="#22262f"/>
+  <rect x="32" y="155" width="140" height="4" rx="2" fill="#22262f"/>
+  <rect x="32" y="167" width="180" height="4" rx="2" fill="#22262f"/>
+  <text x="200" y="218" font-family="monospace" font-size="8" fill="#3a3e48" text-anchor="middle">${title}</text>
+</svg>`;
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+}
+
+const DEMO_SCREENSHOTS = {
+  login_success: _svgThumb("login-success.png", "168", "#22d3ee"),
+  login_form:    _svgThumb("login-form.png", "168", "#06b6d4"),
+  payment_error: _svgThumb("stripe-3ds-failure.png", "168", "#f87171"),
+  payment_form:  _svgThumb("payment-form.png", "168", "#22d3ee"),
+  dashboard:     _svgThumb("dashboard-overview.png", "168", "#34d399"),
+  a11y_report:   _svgThumb("a11y-homepage.png", "168", "#fbbf24"),
+};
+
+// ---------------------------------------------------------------------------
+// Demo reports map — keyed by DEMO_HISTORY run ids
+// ---------------------------------------------------------------------------
+
+/** Minimal Playwright JSON report shape for demo purposes. */
+interface DemoReport {
+  json_report: Record<string, unknown>;
+  network_entries: SilkNetworkEntry[];
+  screenshot_data_uris: string[]; // data-URIs for browser rendering
+  a11y_violations: SilkA11yViolation[];
+  stderr_tail: string;
+}
+
+function _makeSuite(
+  suiteName: string,
+  specs: Array<{
+    title: string;
+    ok: boolean;
+    duration: number;
+    error?: string;
+  }>,
+): Record<string, unknown> {
+  return {
+    title: suiteName,
+    specs: specs.map((s) => ({
+      title: s.title,
+      ok: s.ok,
+      tests: [
+        {
+          status: s.ok ? "passed" : "failed",
+          results: [
+            {
+              duration: s.duration,
+              error: s.error ? { message: s.error } : undefined,
+            },
+          ],
+        },
+      ],
+    })),
+    suites: [],
+  };
+}
+
+function _makeNet(method: string, url: string, status: number): SilkNetworkEntry {
+  return {
+    request: { method, url },
+    response: { status, content: { mimeType: "application/json" } },
+  };
+}
+
+const DEMO_REPORTS: Record<string, DemoReport> = {
+  // ── demo-run-018 (login, passed, today) ────────────────────────────────────
+  "demo-run-018": {
+    json_report: {
+      suites: [
+        _makeSuite("Authentication", [
+          { title: "renders login form", ok: true, duration: 420 },
+          { title: "shows validation errors on empty submit", ok: true, duration: 310 },
+          { title: "rejects invalid credentials", ok: true, duration: 1840 },
+          { title: "logs in with valid credentials", ok: true, duration: 2190 },
+          { title: "redirects to dashboard after login", ok: true, duration: 880 },
+          { title: "persists session across reload", ok: true, duration: 1200 },
+        ]),
+      ],
+    },
+    network_entries: [
+      _makeNet("GET",  "https://app.acmecorp.io/login",           200),
+      _makeNet("POST", "https://api.acmecorp.io/auth/session",     401),
+      _makeNet("POST", "https://api.acmecorp.io/auth/session",     200),
+      _makeNet("GET",  "https://api.acmecorp.io/users/me",         200),
+      _makeNet("GET",  "https://app.acmecorp.io/dashboard",        200),
+    ],
+    screenshot_data_uris: [DEMO_SCREENSHOTS.login_form, DEMO_SCREENSHOTS.login_success],
+    a11y_violations: [],
+    stderr_tail: "",
+  },
+
+  // ── demo-run-017 (a11y/homepage, passed, 2 violations) ─────────────────────
+  "demo-run-017": {
+    json_report: {
+      suites: [
+        _makeSuite("Accessibility — homepage", [
+          { title: "page loads without console errors", ok: true, duration: 520 },
+          { title: "axe-core: zero critical violations", ok: true, duration: 3840 },
+          { title: "colour contrast ≥ 4.5:1 on hero text", ok: true, duration: 1200 },
+          { title: "all images have alt attributes", ok: true, duration: 640 },
+          { title: "keyboard navigation: skip-link works", ok: true, duration: 1080 },
+          { title: "screen reader landmark regions present", ok: true, duration: 2140 },
+        ]),
+      ],
+    },
+    network_entries: [
+      _makeNet("GET",  "https://app.acmecorp.io/",                200),
+      _makeNet("GET",  "https://cdn.acmecorp.io/assets/hero.jpg", 200),
+      _makeNet("GET",  "https://api.acmecorp.io/features",        200),
+    ],
+    screenshot_data_uris: [DEMO_SCREENSHOTS.a11y_report],
+    a11y_violations: [
+      {
+        rule: "color-contrast",
+        impact: "serious",
+        description: "Elements must have sufficient colour contrast",
+        nodes: [
+          "footer > .legal-links > a",
+          "nav.secondary > ul > li.inactive > a",
+        ],
+      },
+      {
+        rule: "aria-required-attr",
+        impact: "critical",
+        description: "Required ARIA attributes must be provided",
+        nodes: ["button[role='tab']:nth-child(3)"],
+      },
+    ],
+    stderr_tail: "",
+  },
+
+  // ── demo-run-016 (payment-flow, FAILED — Stripe 3DS) ──────────────────────
+  "demo-run-016": {
+    json_report: {
+      suites: [
+        _makeSuite("Payment flow", [
+          { title: "adds item to cart",                      ok: true,  duration: 1420 },
+          { title: "navigates to checkout",                  ok: true,  duration: 880  },
+          { title: "fills shipping address",                 ok: true,  duration: 1650 },
+          { title: "selects credit card payment",            ok: true,  duration: 540  },
+          {
+            title: "completes Stripe 3DS checkout",
+            ok: false,
+            duration: 15000,
+            error:
+              "TimeoutError: waiting for selector '.stripe-success-banner' failed\n" +
+              "Expected: visible\nReceived: hidden after 15000ms\n\n" +
+              "  at Object.<anonymous> (tests/checkout/payment-flow.spec.ts:87:5)\n" +
+              "    Stripe 3DS iframe did not complete within timeout. " +
+              "The mock 3DS challenge may not be resolving correctly in CI.",
+          },
+          { title: "verifies order confirmation email",      ok: true,  duration: 1260 },
+          { title: "checks order appears in account history", ok: true,  duration: 980  },
+        ]),
+      ],
+    },
+    network_entries: [
+      _makeNet("GET",  "https://app.acmecorp.io/cart",                   200),
+      _makeNet("POST", "https://api.acmecorp.io/cart/items",              201),
+      _makeNet("GET",  "https://app.acmecorp.io/checkout",               200),
+      _makeNet("POST", "https://api.acmecorp.io/orders",                 201),
+      _makeNet("POST", "https://api.stripe.com/v1/payment_intents",      200),
+      _makeNet("GET",  "https://js.stripe.com/v3/controller/3ds/",       200),
+      _makeNet("POST", "https://api.stripe.com/v1/payment_intents/confirm", 402),
+    ],
+    screenshot_data_uris: [DEMO_SCREENSHOTS.payment_form, DEMO_SCREENSHOTS.payment_error],
+    a11y_violations: [],
+    stderr_tail:
+      "  1 failed\n  ● Payment flow › completes Stripe 3DS checkout\n\n" +
+      "    TimeoutError: waiting for selector '.stripe-success-banner' failed\n" +
+      "    Expected: visible\n    Received: hidden after 15000ms",
+  },
+
+  // ── demo-run-015 (profile/settings, passed) ────────────────────────────────
+  "demo-run-015": {
+    json_report: {
+      suites: [
+        _makeSuite("Profile settings", [
+          { title: "renders settings page",                  ok: true, duration: 620  },
+          { title: "updates display name",                   ok: true, duration: 2100 },
+          { title: "changes email with confirmation flow",   ok: true, duration: 4200 },
+          { title: "toggles notification preferences",       ok: true, duration: 1350 },
+          { title: "uploads profile avatar",                 ok: true, duration: 1980 },
+          { title: "deletes account with confirmation",      ok: true, duration: 990  },
+        ]),
+      ],
+    },
+    network_entries: [
+      _makeNet("GET",  "https://api.acmecorp.io/users/me",              200),
+      _makeNet("PATCH","https://api.acmecorp.io/users/me",              200),
+      _makeNet("POST", "https://api.acmecorp.io/users/me/avatar",       201),
+      _makeNet("POST", "https://api.acmecorp.io/users/me/email-change", 200),
+    ],
+    screenshot_data_uris: [DEMO_SCREENSHOTS.dashboard],
+    a11y_violations: [],
+    stderr_tail: "",
+  },
+
+  // ── demo-run-014 (dashboard/overview, passed) ──────────────────────────────
+  "demo-run-014": {
+    json_report: {
+      suites: [
+        _makeSuite("Dashboard overview", [
+          { title: "loads dashboard within 3 seconds",       ok: true, duration: 2180 },
+          { title: "renders metric cards with data",         ok: true, duration: 1420 },
+          { title: "date range picker updates charts",       ok: true, duration: 3100 },
+          { title: "export CSV contains correct columns",    ok: true, duration: 2640 },
+          { title: "responsive layout on tablet viewport",   ok: true, duration: 1840 },
+          { title: "notification badge shows unread count",  ok: true, duration: 1200 },
+        ]),
+      ],
+    },
+    network_entries: [
+      _makeNet("GET", "https://api.acmecorp.io/metrics?range=7d",     200),
+      _makeNet("GET", "https://api.acmecorp.io/metrics?range=30d",    200),
+      _makeNet("GET", "https://api.acmecorp.io/notifications",        200),
+      _makeNet("GET", "https://api.acmecorp.io/export/csv?range=7d",  200),
+    ],
+    screenshot_data_uris: [DEMO_SCREENSHOTS.dashboard],
+    a11y_violations: [],
+    stderr_tail: "",
+  },
+};
+
+// Populate remaining history entries with minimal but non-empty demo reports
+// so every run click shows something useful.
+for (const entry of DEMO_HISTORY) {
+  if (!DEMO_REPORTS[entry.id]) {
+    const specName = entry.spec_path.split("/").pop()?.replace(".spec.ts", "") ?? entry.id;
+    DEMO_REPORTS[entry.id] = {
+      json_report: {
+        suites: [
+          _makeSuite(specName, [
+            { title: "setup and navigate",          ok: true,  duration: 480  },
+            { title: "primary user flow",           ok: entry.status === "passed", duration: 1840,
+              error: entry.status !== "passed" ? "Expected condition was not met within timeout." : undefined },
+            { title: "assert page state",           ok: entry.status !== "error", duration: 920  },
+            { title: "cleanup session",             ok: true,  duration: 240  },
+          ]),
+        ],
+      },
+      network_entries: [
+        _makeNet("GET",  `https://app.acmecorp.io/${specName}`, 200),
+        _makeNet("GET",  "https://api.acmecorp.io/health",       200),
+      ],
+      screenshot_data_uris: entry.status === "failed"
+        ? [DEMO_SCREENSHOTS.payment_error]
+        : [DEMO_SCREENSHOTS.dashboard],
+      a11y_violations: entry.a11y_violations_count > 0
+        ? [
+            {
+              rule: "color-contrast",
+              impact: "moderate",
+              description: "Elements must have sufficient colour contrast",
+              nodes: [".footer-link", ".secondary-nav-item"],
+            },
+          ]
+        : [],
+      stderr_tail: entry.stderr_tail,
+    };
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
@@ -519,39 +845,51 @@ function StepTimeline({ report }: { report: Record<string, unknown> | null }) {
 
   return (
     <div className="flex flex-col gap-1 overflow-y-auto p-2">
-      {allSpecs.map((spec, i) => {
-        const result = spec.tests?.[0]?.results?.[0];
-        const duration = result?.duration ?? 0;
-        const errorMsg = result?.error?.message;
-        return (
-          <div
-            key={i}
-            className={`flex items-start gap-2 rounded p-2 text-xs ${
-              spec.ok
-                ? "bg-emerald-950/40 border border-emerald-900/40"
-                : "bg-red-950/40 border border-red-900/40"
-            }`}
-          >
-            {spec.ok ? (
-              <CheckCircle2 size={12} className="mt-0.5 shrink-0 text-emerald-400" />
-            ) : (
-              <XCircle size={12} className="mt-0.5 shrink-0 text-red-400" />
-            )}
-            <div className="flex-1 min-w-0">
-              <div className="text-neutral-200 font-medium truncate">{spec.title}</div>
-              {errorMsg && (
-                <div className="mt-0.5 text-red-400 text-[10px] line-clamp-3 font-mono">
-                  {errorMsg}
+      {/* Suite label shown as a header strip with cyan accent left-border */}
+      {suites.map((suite, si) => (
+        <div key={si}>
+          {suite.title && (
+            <div className="flex items-center gap-2 px-1 py-1 mb-0.5 border-l-2 border-cobweb-500">
+              <span className="text-[10px] uppercase tracking-wider text-cobweb-400 font-semibold">
+                {suite.title}
+              </span>
+            </div>
+          )}
+          {flattenSpecs(suite).map((spec, i) => {
+            const result = spec.tests?.[0]?.results?.[0];
+            const duration = result?.duration ?? 0;
+            const errorMsg = result?.error?.message;
+            return (
+              <div
+                key={i}
+                className={`flex items-start gap-2 rounded p-2 text-xs ${
+                  spec.ok
+                    ? "bg-emerald-950/30 border border-emerald-900/40"
+                    : "bg-red-950/40 border border-red-900/40"
+                }`}
+              >
+                {spec.ok ? (
+                  <CheckCircle2 size={12} className="mt-0.5 shrink-0 text-emerald-400" />
+                ) : (
+                  <XCircle size={12} className="mt-0.5 shrink-0 text-red-400" />
+                )}
+                <div className="flex-1 min-w-0">
+                  <div className="text-neutral-200 font-medium truncate">{spec.title}</div>
+                  {errorMsg && (
+                    <div className="mt-0.5 text-red-400 text-[10px] line-clamp-3 font-mono">
+                      {errorMsg}
+                    </div>
+                  )}
                 </div>
-              )}
-            </div>
-            <div className="shrink-0 flex items-center gap-1 text-neutral-500">
-              <Clock size={10} />
-              {duration}ms
-            </div>
-          </div>
-        );
-      })}
+                <div className="shrink-0 flex items-center gap-1 text-cobweb-600">
+                  <Clock size={10} />
+                  <span className="font-mono">{duration}ms</span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      ))}
     </div>
   );
 }
@@ -1072,6 +1410,8 @@ export function SilkPanel({ onToast }: SilkPanelProps) {
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [activeTab, setActiveTab] = useState<ActiveTab>("timeline");
   const [activeBrowser, setActiveBrowser] = useState("chromium");
+  // True while running in a plain browser without a live sidecar.
+  const [demoMode, setDemoMode] = useState<boolean>(getBrowserDemoMode);
 
   // Check browser presence on mount.
   const checkBrowsers = useCallback(async () => {
@@ -1079,6 +1419,9 @@ export function SilkPanel({ onToast }: SilkPanelProps) {
     try {
       const res = await sidecar.silkCheckBrowsers();
       setBrowsersInstalled(res.installed);
+      // Sidecar responded — we are NOT in browser-demo mode.
+      disableBrowserDemo();
+      setDemoMode(false);
     } catch {
       setBrowsersInstalled(false);
     } finally {
@@ -1091,7 +1434,14 @@ export function SilkPanel({ onToast }: SilkPanelProps) {
     setLoadingHistory(true);
     try {
       const runs = await sidecar.silkListRuns(50);
-      setHistoryRuns(runs.length > 0 ? runs : DEMO_HISTORY);
+      if (runs.length > 0) {
+        // Real sidecar data — disable demo mode.
+        disableBrowserDemo();
+        setDemoMode(false);
+        setHistoryRuns(runs);
+      } else {
+        setHistoryRuns(DEMO_HISTORY);
+      }
     } catch {
       // Sidecar unavailable — populate with demo data so the UI is never blank.
       setHistoryRuns(DEMO_HISTORY);
@@ -1104,6 +1454,14 @@ export function SilkPanel({ onToast }: SilkPanelProps) {
     void checkBrowsers();
     void loadHistory();
   }, [checkBrowsers, loadHistory]);
+
+  // Browser-demo auto-select: once history is populated and we are in demo mode,
+  // pre-select the first (most-recent) run so the panel is never empty on load.
+  useEffect(() => {
+    if (demoMode && historyRuns.length > 0 && selectedRunId === null) {
+      setSelectedRunId(historyRuns[0].id);
+    }
+  }, [demoMode, historyRuns, selectedRunId]);
 
   const handleInstallDone = useCallback(() => {
     setShowInstallDialog(false);
@@ -1237,12 +1595,31 @@ export function SilkPanel({ onToast }: SilkPanelProps) {
   const browserResult: SilkBrowserRunResult | null =
     selectedRun?.per_browser_results?.[activeBrowser] ?? null;
 
-  const a11yViolations =
+  // In browser-demo mode, augment a history selection with bundled DEMO_REPORTS.
+  const demoReport = (demoMode && selectedRunId && !selectedRun)
+    ? (DEMO_REPORTS[selectedRunId] ?? null)
+    : null;
+
+  // Resolved data for the right-panel tabs — demo data fills in when real run is absent.
+  const activeJsonReport: Record<string, unknown> | null =
+    browserResult?.json_report ?? selectedRun?.json_report ?? demoReport?.json_report ?? null;
+  const activeNetworkEntries: SilkNetworkEntry[] =
+    demoReport ? demoReport.network_entries : extractNetworkEntries(activeJsonReport);
+  const activeDemoScreenshots: string[] = demoReport?.screenshot_data_uris ?? [];
+  const activeRealScreenshots: string[] = demoReport ? [] : extractScreenshotPaths(activeJsonReport);
+
+  // A11y violations — demo or real.
+  const a11yViolations: SilkA11yViolation[] =
+    demoReport?.a11y_violations ??
     selectedRun?.a11y_violations ??
     browserResult?.a11y_violations ??
     [];
 
-  // Right-panel tab definitions.
+  // Stats for the center panel when showing a history run in demo mode.
+  const selectedHistoryRun = historyRuns.find((h) => h.id === selectedRunId) ?? null;
+  const demoStderr = demoReport?.stderr_tail ?? selectedHistoryRun?.stderr_tail ?? "";
+
+  // Right-panel tab definitions — use cobweb (cyan) accent on active tab.
   const TABS: { id: ActiveTab; label: string; icon: React.ReactNode }[] = [
     { id: "timeline", label: t("silk.tabs.timeline"), icon: <Play size={11} /> },
     { id: "network", label: t("silk.tabs.network"), icon: <Globe size={11} /> },
@@ -1336,13 +1713,18 @@ export function SilkPanel({ onToast }: SilkPanelProps) {
           <div className="flex w-52 shrink-0 flex-col border-r border-neutral-800 bg-neutral-925">
             <div className="flex items-center justify-between border-b border-neutral-800 px-3 py-2">
               <span className="flex items-center gap-1.5 text-xs font-semibold text-neutral-300">
-                <MonitorPlay size={12} className="text-emerald-500" />
+                <MonitorPlay size={12} className="text-cobweb-500" />
                 {t("silk.history.title")}
+                {demoMode && (
+                  <span className="rounded border border-cobweb-800 bg-cobweb-950/60 px-1 py-px text-[8px] uppercase tracking-wider text-cobweb-400">
+                    demo
+                  </span>
+                )}
               </span>
               <button
                 onClick={() => handleRun("", "", ["chromium"])}
                 disabled={running}
-                className="text-neutral-500 hover:text-emerald-400 transition-colors"
+                className="text-neutral-500 hover:text-cobweb-400 transition-colors"
                 title={t("silk.history.newRun.title")}
               >
                 <Plus size={12} />
@@ -1373,7 +1755,7 @@ export function SilkPanel({ onToast }: SilkPanelProps) {
                     }}
                     className={`w-full text-left px-3 py-2 flex flex-col gap-0.5 transition-colors border-l-2 ${
                       selectedRunId === entry.run.run_id
-                        ? "bg-neutral-800 border-emerald-500"
+                        ? "bg-neutral-800 border-cobweb-500"
                         : "hover:bg-neutral-900 border-transparent"
                     }`}
                   >
@@ -1404,7 +1786,7 @@ export function SilkPanel({ onToast }: SilkPanelProps) {
                         onClick={() => setSelectedRunId(h.id)}
                         className={`w-full text-left px-3 py-2 flex flex-col gap-0.5 transition-colors border-l-2 ${
                           selectedRunId === h.id
-                            ? "bg-neutral-800 border-emerald-500"
+                            ? "bg-neutral-800 border-cobweb-500"
                             : "hover:bg-neutral-900 border-transparent"
                         }`}
                       >
@@ -1445,7 +1827,7 @@ export function SilkPanel({ onToast }: SilkPanelProps) {
               />
             )}
 
-            {/* Stats row */}
+            {/* Stats row — real run */}
             {selectedRun && (
               <div className="border-b border-neutral-800 px-4 py-3">
                 <div className="flex items-center gap-3 mb-2">
@@ -1456,7 +1838,7 @@ export function SilkPanel({ onToast }: SilkPanelProps) {
                     <a
                       href={selectedSession.traceUrl}
                       download={`trace-${selectedRun.run_id}.zip`}
-                      className="flex items-center gap-1 text-xs text-emerald-400 hover:text-emerald-300 transition-colors"
+                      className="flex items-center gap-1 text-xs text-cobweb-400 hover:text-cobweb-300 transition-colors"
                     >
                       <Download size={11} />
                       {t("silk.network.downloadTrace")}
@@ -1483,7 +1865,7 @@ export function SilkPanel({ onToast }: SilkPanelProps) {
                     {
                       label: t("silk.stats.duration"),
                       value: durationLabel(browserResult?.duration_ms ?? selectedRun.duration_ms),
-                      color: "text-neutral-300",
+                      color: "text-cobweb-300",
                     },
                   ].map(({ label, value, color }) => (
                     <div key={label} className="rounded bg-neutral-900 p-2 flex flex-col items-center">
@@ -1507,7 +1889,59 @@ export function SilkPanel({ onToast }: SilkPanelProps) {
               </div>
             )}
 
-            {!selectedRun && (
+            {/* Stats row — demo / history run (no live SilkRunOutput) */}
+            {!selectedRun && selectedHistoryRun && (
+              <div className="border-b border-neutral-800 px-4 py-3">
+                <div className="flex items-center gap-2 mb-2">
+                  <span className="text-xs font-semibold text-neutral-300">
+                    {selectedHistoryRun.spec_path.split("/").pop()}
+                  </span>
+                  <StatusIcon status={selectedHistoryRun.status} size={10} />
+                  {demoMode && (
+                    <span className="text-[9px] text-cobweb-500 border border-cobweb-800/50 rounded px-1">
+                      demo data
+                    </span>
+                  )}
+                </div>
+                <div className="grid grid-cols-4 gap-2">
+                  {(() => {
+                    const specs = activeJsonReport
+                      ? (activeJsonReport.suites as Array<Record<string,unknown>> | undefined ?? [])
+                          .flatMap((s) => (s.specs as Array<Record<string,unknown>> | undefined ?? []))
+                      : [];
+                    const passed = specs.filter((s) => s.ok).length;
+                    const failed = specs.filter((s) => !s.ok).length;
+                    return [
+                      { label: t("silk.stats.passed"), value: passed, color: "text-emerald-400" },
+                      { label: t("silk.stats.failed"), value: failed, color: "text-red-400" },
+                      { label: t("silk.stats.errors"), value: 0, color: "text-amber-400" },
+                      {
+                        label: t("silk.stats.duration"),
+                        value: durationLabel(selectedHistoryRun.duration_ms),
+                        color: "text-cobweb-300",
+                      },
+                    ];
+                  })().map(({ label, value, color }) => (
+                    <div key={label} className="rounded bg-neutral-900 p-2 flex flex-col items-center">
+                      <span className={`text-base font-bold ${color}`}>{value}</span>
+                      <span className="text-[10px] text-neutral-500">{label}</span>
+                    </div>
+                  ))}
+                </div>
+                {demoStderr && (
+                  <div className="mt-3">
+                    <span className="text-[10px] uppercase text-neutral-500 tracking-wider">
+                      {t("silk.stats.stderr")}
+                    </span>
+                    <pre className="mt-1 max-h-28 overflow-y-auto rounded bg-neutral-950 p-2 text-[10px] text-neutral-400 font-mono whitespace-pre-wrap">
+                      {demoStderr}
+                    </pre>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {!selectedRun && !selectedHistoryRun && (
               <div className="flex flex-1 items-center justify-center text-xs text-neutral-600">
                 {t("silk.stats.selectRun")}
               </div>
@@ -1516,7 +1950,7 @@ export function SilkPanel({ onToast }: SilkPanelProps) {
 
           {/* Right sidebar — tabs */}
           <div className="flex w-72 shrink-0 flex-col border-l border-neutral-800">
-            {/* Tab headers */}
+            {/* Tab headers — cobweb (cyan) accent on active */}
             <div className="flex border-b border-neutral-800 overflow-x-auto">
               {TABS.map((tab) => (
                 <button
@@ -1524,7 +1958,7 @@ export function SilkPanel({ onToast }: SilkPanelProps) {
                   onClick={() => setActiveTab(tab.id)}
                   className={`flex items-center gap-1 px-2.5 py-2 text-[10px] font-medium whitespace-nowrap transition-colors ${
                     activeTab === tab.id
-                      ? "border-b-2 border-emerald-500 text-emerald-300"
+                      ? "border-b-2 border-cobweb-500 text-cobweb-300"
                       : "text-neutral-500 hover:text-neutral-300"
                   }`}
                 >
@@ -1537,9 +1971,7 @@ export function SilkPanel({ onToast }: SilkPanelProps) {
             {/* Tab content */}
             <div className="flex-1 min-h-0 overflow-hidden">
               {activeTab === "timeline" && (
-                <StepTimeline
-                  report={browserResult?.json_report ?? selectedRun?.json_report ?? null}
-                />
+                <StepTimeline report={activeJsonReport} />
               )}
 
               {activeTab === "a11y" && (
@@ -1548,9 +1980,9 @@ export function SilkPanel({ onToast }: SilkPanelProps) {
 
               {activeTab === "console" && (
                 <div className="p-2 overflow-y-auto h-full">
-                  {(browserResult?.stderr_tail || selectedRun?.stderr_tail) ? (
+                  {(browserResult?.stderr_tail || selectedRun?.stderr_tail || demoStderr) ? (
                     <pre className="text-[10px] font-mono text-neutral-400 whitespace-pre-wrap">
-                      {browserResult?.stderr_tail ?? selectedRun?.stderr_tail}
+                      {browserResult?.stderr_tail ?? selectedRun?.stderr_tail ?? demoStderr}
                     </pre>
                   ) : (
                     <div className="flex items-center justify-center h-24 text-xs text-neutral-600">
@@ -1561,18 +1993,16 @@ export function SilkPanel({ onToast }: SilkPanelProps) {
               )}
 
               {activeTab === "network" && (() => {
-                const activeReport = browserResult?.json_report ?? selectedRun?.json_report ?? null;
-                const networkEntries = extractNetworkEntries(activeReport);
-                if (networkEntries.length === 0) {
+                if (activeNetworkEntries.length === 0) {
                   return (
                     <div className="flex items-center justify-center h-full text-xs text-neutral-600 flex-col gap-2">
                       <Globe size={20} className="text-neutral-700" />
-                      {activeReport ? t("silk.network.noEntries.noReport") : t("silk.network.noEntries.inTrace")}
+                      {activeJsonReport ? t("silk.network.noEntries.noReport") : t("silk.network.noEntries.inTrace")}
                       {selectedSession?.traceUrl && (
                         <a
                           href={selectedSession.traceUrl}
                           download={`trace-${selectedRun?.run_id}.zip`}
-                          className="flex items-center gap-1 text-xs text-emerald-400 hover:text-emerald-300"
+                          className="flex items-center gap-1 text-xs text-cobweb-400 hover:text-cobweb-300"
                         >
                           <Download size={11} />
                           {t("silk.network.downloadTrace")}
@@ -1584,14 +2014,14 @@ export function SilkPanel({ onToast }: SilkPanelProps) {
                 return (
                   <div className="flex flex-col overflow-y-auto h-full">
                     <div className="px-3 py-1.5 border-b border-neutral-800 text-[10px] text-neutral-500">
-                      {t("silk.network.requestCount", { n: networkEntries.length })}
+                      {t("silk.network.requestCount", { n: activeNetworkEntries.length })}
                     </div>
-                    {networkEntries.map((entry, i) => {
+                    {activeNetworkEntries.map((entry, i) => {
                       const req = entry.request ?? {};
                       const res = (entry as Record<string, unknown>).response as Record<string, unknown> | undefined;
                       const status = res?.status as number | undefined;
                       const statusColor = !status ? "text-neutral-500"
-                        : status < 300 ? "text-emerald-400"
+                        : status < 300 ? "text-cobweb-400"
                         : status < 400 ? "text-amber-400"
                         : "text-red-400";
                       return (
@@ -1609,19 +2039,47 @@ export function SilkPanel({ onToast }: SilkPanelProps) {
               })()}
 
               {activeTab === "screenshots" && (() => {
-                const activeReport = browserResult?.json_report ?? selectedRun?.json_report ?? null;
-                const screenshotPaths = extractScreenshotPaths(activeReport);
-                if (screenshotPaths.length === 0) {
+                // Demo screenshots (data-URIs) take priority in browser-demo mode.
+                if (activeDemoScreenshots.length > 0) {
+                  return (
+                    <div className="flex flex-col gap-2 overflow-y-auto p-2 h-full">
+                      {activeDemoScreenshots.map((src, i) => {
+                        const labels = [
+                          "screenshot-01.png",
+                          "screenshot-02.png",
+                          "screenshot-03.png",
+                        ];
+                        const label = labels[i] ?? `screenshot-${String(i + 1).padStart(2, "0")}.png`;
+                        return (
+                          <div key={i} className="rounded border border-cobweb-900/40 bg-neutral-900 p-2">
+                            <div className="flex items-center gap-2 mb-1.5">
+                              <span className="text-[10px] text-cobweb-500 font-mono truncate flex-1">
+                                {label}
+                              </span>
+                            </div>
+                            <img
+                              src={src}
+                              alt={`demo-screenshot-${i}`}
+                              className="w-full rounded object-contain max-h-48 bg-neutral-950 border border-neutral-800"
+                            />
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                }
+
+                if (activeRealScreenshots.length === 0) {
                   return (
                     <div className="flex items-center justify-center h-full text-xs text-neutral-600 flex-col gap-2">
                       <Image size={20} className="text-neutral-700" />
-                      {activeReport ? t("silk.screenshots.none.noReport") : t("silk.screenshots.none.captured")}
+                      {activeJsonReport ? t("silk.screenshots.none.noReport") : t("silk.screenshots.none.captured")}
                     </div>
                   );
                 }
                 return (
                   <div className="flex flex-col gap-2 overflow-y-auto p-2 h-full">
-                    {screenshotPaths.map((p, i) => (
+                    {activeRealScreenshots.map((p, i) => (
                       <div key={i} className="rounded border border-neutral-800 bg-neutral-900 p-2">
                         <div className="flex items-center justify-between gap-2 mb-1.5">
                           <span className="text-[10px] text-neutral-400 font-mono truncate flex-1" title={p}>
@@ -1632,7 +2090,7 @@ export function SilkPanel({ onToast }: SilkPanelProps) {
                             target="_blank"
                             rel="noreferrer"
                             title={p}
-                            className="shrink-0 text-neutral-500 hover:text-emerald-400 transition-colors"
+                            className="shrink-0 text-neutral-500 hover:text-cobweb-400 transition-colors"
                           >
                             <ExternalLink size={11} />
                           </a>
