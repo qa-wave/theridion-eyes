@@ -141,7 +141,7 @@ def _make_json_report(
         "stats": {
             "expected": sum(1 for t in test_cases if t.get("ok", True)),
             "unexpected": sum(1 for t in test_cases if not t.get("ok", True)),
-            "skipped": 0,
+            "skipped": sum(1 for t in test_cases if t.get("skipped", False)),
             "duration": sum(t.get("duration", 500) for t in test_cases),
         },
         "suites": [
@@ -179,12 +179,60 @@ def _network_attachment(entries: list[dict]) -> dict:
 def _build_seed_runs() -> list[dict]:
     """Return ordered list of run dicts (newest first matches DB ordering)."""
 
-    # Run 10 — today (just now): login.spec.ts, chromium, passed
+    # ---------------------------------------------------------------------------
+    # Rich network entries used across multiple runs
+    # ---------------------------------------------------------------------------
+    _net_dashboard = [
+        {"request": {"method": "GET",  "url": "https://app.acmecorp.io/api/v2/metrics?range=7d",   "headers": {"Authorization": "Bearer tok-prod"}}, "response": {"status": 200, "bodySize": 2840, "timings": {"wait": 42, "receive": 18}, "content": {"mimeType": "application/json"}}},
+        {"request": {"method": "GET",  "url": "https://app.acmecorp.io/api/v2/users/active",       "headers": {"Authorization": "Bearer tok-prod"}}, "response": {"status": 200, "bodySize": 1120, "timings": {"wait": 31, "receive": 9},  "content": {"mimeType": "application/json"}}},
+        {"request": {"method": "GET",  "url": "https://app.acmecorp.io/api/v2/notifications?unread=1", "headers": {"Authorization": "Bearer tok-prod"}}, "response": {"status": 200, "bodySize": 580, "timings": {"wait": 22, "receive": 6}, "content": {"mimeType": "application/json"}}},
+        {"request": {"method": "POST", "url": "https://analytics.acmecorp.io/collect",             "headers": {"Content-Type": "application/json"}},  "response": {"status": 204, "bodySize": 0,    "timings": {"wait": 8,  "receive": 2},  "content": {"mimeType": "text/plain"}}},
+        {"request": {"method": "GET",  "url": "https://cdn.acmecorp.io/assets/dashboard.css",      "headers": {}},                                    "response": {"status": 200, "bodySize": 48200,"timings": {"wait": 5,  "receive": 12}, "content": {"mimeType": "text/css"}}},
+        {"request": {"method": "GET",  "url": "https://cdn.acmecorp.io/assets/charts.bundle.js",   "headers": {}},                                    "response": {"status": 200, "bodySize": 186000,"timings": {"wait": 8,  "receive": 62}, "content": {"mimeType": "application/javascript"}}},
+        {"request": {"method": "GET",  "url": "https://app.acmecorp.io/api/v2/feature-flags",      "headers": {"Authorization": "Bearer tok-prod"}}, "response": {"status": 200, "bodySize": 320,  "timings": {"wait": 15, "receive": 4},  "content": {"mimeType": "application/json"}}},
+        {"request": {"method": "GET",  "url": "https://app.acmecorp.io/api/v2/revenue/chart?period=30d","headers": {"Authorization": "Bearer tok-prod"}}, "response": {"status": 200, "bodySize": 4200, "timings": {"wait": 68, "receive": 22}, "content": {"mimeType": "application/json"}}},
+    ]
+    _net_checkout = [
+        {"request": {"method": "GET",  "url": "https://app.acmecorp.io/api/v2/cart",               "headers": {"Authorization": "Bearer tok-prod"}}, "response": {"status": 200, "bodySize": 860,  "timings": {"wait": 38, "receive": 11}, "content": {"mimeType": "application/json"}}},
+        {"request": {"method": "POST", "url": "https://api.stripe.com/v1/payment_intents",         "headers": {"Content-Type": "application/x-www-form-urlencoded"}}, "response": {"status": 200, "bodySize": 1680, "timings": {"wait": 210, "receive": 45}, "content": {"mimeType": "application/json"}}},
+        {"request": {"method": "GET",  "url": "https://app.acmecorp.io/api/v2/orders/latest",      "headers": {"Authorization": "Bearer tok-prod"}}, "response": {"status": 200, "bodySize": 720,  "timings": {"wait": 29, "receive": 8},  "content": {"mimeType": "application/json"}}},
+        {"request": {"method": "POST", "url": "https://app.acmecorp.io/api/v2/analytics/funnel",   "headers": {"Content-Type": "application/json"}},  "response": {"status": 201, "bodySize": 0,    "timings": {"wait": 12, "receive": 3},  "content": {"mimeType": "text/plain"}}},
+        {"request": {"method": "GET",  "url": "https://js.stripe.com/v3/",                         "headers": {}},                                    "response": {"status": 200, "bodySize": 95000,"timings": {"wait": 15, "receive": 38}, "content": {"mimeType": "application/javascript"}}},
+        {"request": {"method": "POST", "url": "https://app.acmecorp.io/api/v2/checkout/validate",  "headers": {"Content-Type": "application/json"}},  "response": {"status": 200, "bodySize": 140,  "timings": {"wait": 55, "receive": 4},  "content": {"mimeType": "application/json"}}},
+    ]
+    _net_auth = [
+        {"request": {"method": "POST", "url": "https://app.acmecorp.io/api/v2/auth/login",         "headers": {"Content-Type": "application/json"}},  "response": {"status": 200, "bodySize": 480,  "timings": {"wait": 112, "receive": 8}, "content": {"mimeType": "application/json"}}},
+        {"request": {"method": "GET",  "url": "https://app.acmecorp.io/api/v2/auth/session",       "headers": {"Authorization": "Bearer tok-prod"}}, "response": {"status": 200, "bodySize": 260,  "timings": {"wait": 18, "receive": 5},  "content": {"mimeType": "application/json"}}},
+        {"request": {"method": "GET",  "url": "https://app.acmecorp.io/api/v2/users/me",           "headers": {"Authorization": "Bearer tok-prod"}}, "response": {"status": 200, "bodySize": 380,  "timings": {"wait": 21, "receive": 6},  "content": {"mimeType": "application/json"}}},
+        {"request": {"method": "POST", "url": "https://analytics.acmecorp.io/collect",             "headers": {"Content-Type": "application/json"}},  "response": {"status": 204, "bodySize": 0,    "timings": {"wait": 7,  "receive": 2},  "content": {"mimeType": "text/plain"}}},
+        {"request": {"method": "GET",  "url": "https://app.acmecorp.io/api/v2/feature-flags",      "headers": {"Authorization": "Bearer tok-prod"}}, "response": {"status": 200, "bodySize": 320,  "timings": {"wait": 14, "receive": 4},  "content": {"mimeType": "application/json"}}},
+    ]
+
+    # ---------------------------------------------------------------------------
+    # Rich a11y violation sets
+    # ---------------------------------------------------------------------------
+    _axe_homepage_v1 = [
+        {"id": "color-contrast",      "impact": "serious",  "description": "Elements must have sufficient color contrast (4.5:1 for normal text)", "nodes": [{"target": [".hero-subtitle"]}, {"target": [".nav-link--active"]}]},
+        {"id": "image-alt",           "impact": "critical", "description": "Images must have alternative text", "nodes": [{"target": ["img.partner-logo-3"]}, {"target": ["img.hero-bg"]}]},
+        {"id": "link-name",           "impact": "serious",  "description": "Links must have discernible text", "nodes": [{"target": ["a.icon-only-link"]}]},
+        {"id": "aria-required-attr",  "impact": "critical", "description": "Required ARIA attributes must be provided", "nodes": [{"target": ["[role=progressbar]"]}]},
+    ]
+    _axe_homepage_v2 = [
+        {"id": "color-contrast",      "impact": "serious",  "description": "Elements must have sufficient color contrast", "nodes": [{"target": [".hero-subtitle"]}]},
+        {"id": "image-alt",           "impact": "critical", "description": "Images must have alternative text", "nodes": [{"target": ["img.logo"]}]},
+    ]
+    _axe_homepage_resolved = [
+        {"id": "aria-required-attr",  "impact": "critical", "description": "Required ARIA attributes must be provided", "nodes": [{"target": ["[role=progressbar]"]}]},
+    ]
+
+    # ---------------------------------------------------------------------------
+    # Run 10 — today (CI/PR #847): full login suite, chromium, all 7 tests passed
+    # ---------------------------------------------------------------------------
     run10 = {
         "id": _RUN_IDS[9],
         "spec_path": "tests/auth/login.spec.ts",
         "exit_code": 0,
-        "duration_ms": 3240,
+        "duration_ms": 6840,
         "started_at": _ts(0.02, hour=9, minute=15),
         "browsers": ["chromium"],
         "trace_path": None,
@@ -192,36 +240,28 @@ def _build_seed_runs() -> list[dict]:
         "a11y_violations_count": 0,
         "stderr_tail": "",
         "json_report": _make_json_report(
-            "Login spec",
+            "Login flow",
             [
-                {"title": "displays login form", "ok": True, "duration": 480},
-                {"title": "logs in with valid credentials", "ok": True, "duration": 1200},
-                {"title": "shows error on invalid password", "ok": True, "duration": 860},
-                {"title": "redirects to dashboard after login", "ok": True, "duration": 700},
+                {"title": "renders login page with all form fields",          "ok": True, "duration": 480,
+                 "attachments": [_network_attachment(_net_auth)]},
+                {"title": "logs in with valid credentials → dashboard",       "ok": True, "duration": 1340},
+                {"title": "shows inline error on wrong password",             "ok": True, "duration": 890},
+                {"title": "shows inline error on unregistered email",         "ok": True, "duration": 720},
+                {"title": "redirects to returnTo path after login",           "ok": True, "duration": 940},
+                {"title": "rate-limits after 5 failed attempts",              "ok": True, "duration": 1120},
+                {"title": "remember-me checkbox persists session 30 days",    "ok": True, "duration": 1350},
             ],
         ),
     }
 
-    # Run 9 — today: homepage a11y, chromium+firefox, passed with 2 a11y violations
-    axe_violations = [
-        {
-            "id": "color-contrast",
-            "impact": "serious",
-            "description": "Elements must have sufficient color contrast",
-            "nodes": [{"target": [".hero-subtitle"]}],
-        },
-        {
-            "id": "image-alt",
-            "impact": "critical",
-            "description": "Images must have alternative text",
-            "nodes": [{"target": ["img.logo"]}],
-        },
-    ]
+    # ---------------------------------------------------------------------------
+    # Run 9 — today: homepage a11y full audit, chromium+firefox, 2 violations fixed vs baseline
+    # ---------------------------------------------------------------------------
     run9 = {
         "id": _RUN_IDS[8],
         "spec_path": "tests/a11y/homepage-axe.spec.ts",
         "exit_code": 0,
-        "duration_ms": 5180,
+        "duration_ms": 9420,
         "started_at": _ts(0.1, hour=8, minute=42),
         "browsers": ["chromium", "firefox"],
         "trace_path": None,
@@ -232,22 +272,29 @@ def _build_seed_runs() -> list[dict]:
             "Homepage accessibility audit",
             [
                 {
-                    "title": "homepage passes axe audit",
+                    "title": "homepage passes axe audit (WCAG 2.1 AA)",
                     "ok": True,
-                    "duration": 2100,
-                    "attachments": [_axe_attachment(axe_violations)],
+                    "duration": 2840,
+                    "attachments": [_axe_attachment(_axe_homepage_v2)],
                 },
-                {"title": "nav links are keyboard-accessible", "ok": True, "duration": 880},
+                {"title": "nav links are keyboard-accessible (Tab order)",          "ok": True, "duration": 960},
+                {"title": "skip-to-content link appears on first Tab press",        "ok": True, "duration": 780},
+                {"title": "hero CTA is reachable and activatable via keyboard",     "ok": True, "duration": 640},
+                {"title": "footer links have sufficient target size (≥44×44px)",    "ok": True, "duration": 520},
+                {"title": "modal traps focus and dismisses with Escape",            "ok": True, "duration": 1180},
+                {"title": "colour-scheme toggle preserves contrast ratios",         "ok": True, "duration": 900},
             ],
         ),
     }
 
-    # Run 8 — yesterday: payment flow, chromium, FAILED (1 test failed)
+    # ---------------------------------------------------------------------------
+    # Run 8 — yesterday (PR #841 regression): payment flow, chromium, 1 test FAILED
+    # ---------------------------------------------------------------------------
     run8 = {
         "id": _RUN_IDS[7],
         "spec_path": "tests/checkout/payment-flow.spec.ts",
         "exit_code": 1,
-        "duration_ms": 8650,
+        "duration_ms": 18650,
         "started_at": _ts(1.0, hour=16, minute=5),
         "browsers": ["chromium"],
         "trace_path": None,
@@ -255,37 +302,40 @@ def _build_seed_runs() -> list[dict]:
         "a11y_violations_count": 0,
         "stderr_tail": (
             "  1 failed\n"
-            "  ● checkout › payment-flow › completes Stripe checkout\n"
+            "  ● Payment flow › completes Stripe 3DS checkout\n"
             "\n"
-            "    TimeoutError: waiting for selector '.stripe-success' failed\n"
+            "    TimeoutError: waiting for selector '.stripe-success-banner' failed\n"
             "    at Object.waitForSelector (playwright-core/lib/client/page.ts:123)\n"
             "    Expected: visible\n"
-            "    Received: hidden after 10000ms"
+            "    Received: hidden after 15000ms\n"
+            "\n"
+            "  Note: Stripe test-mode 3DS challenge iframe was not dismissed correctly."
         ),
         "json_report": _make_json_report(
             "Payment flow",
             [
-                {"title": "loads checkout page", "ok": True, "duration": 920},
-                {"title": "fills in card details", "ok": True, "duration": 1380},
-                {
-                    "title": "completes Stripe checkout",
-                    "ok": False,
-                    "duration": 10000,
-                    "error": "TimeoutError: waiting for selector '.stripe-success' failed: timeout 10000ms exceeded",
-                },
-                {"title": "shows order confirmation", "ok": True, "duration": 350},
+                {"title": "loads checkout page with order summary",             "ok": True, "duration": 1020,
+                 "attachments": [_network_attachment(_net_checkout)]},
+                {"title": "applies promo code SAVE20 successfully",             "ok": True, "duration": 1480},
+                {"title": "fills card details in Stripe iframe",                "ok": True, "duration": 2200},
+                {"title": "completes Stripe 3DS checkout",                      "ok": False, "duration": 15000,
+                 "error": "TimeoutError: waiting for selector '.stripe-success-banner' failed: timeout 15000ms exceeded"},
+                {"title": "shows order confirmation with order ID",             "ok": True, "duration": 480},
+                {"title": "sends order confirmation email (webhook verified)",  "ok": True, "duration": 2870},
             ],
         ),
     }
 
-    # Run 7 — yesterday: profile settings, chromium, passed
+    # ---------------------------------------------------------------------------
+    # Run 7 — yesterday: profile settings suite, chromium+webkit, all passed
+    # ---------------------------------------------------------------------------
     run7 = {
         "id": _RUN_IDS[6],
         "spec_path": "tests/profile/settings.spec.ts",
         "exit_code": 0,
-        "duration_ms": 4120,
+        "duration_ms": 11240,
         "started_at": _ts(1.0, hour=14, minute=22),
-        "browsers": ["chromium"],
+        "browsers": ["chromium", "webkit"],
         "trace_path": None,
         "screenshot_paths": [],
         "a11y_violations_count": 0,
@@ -293,20 +343,26 @@ def _build_seed_runs() -> list[dict]:
         "json_report": _make_json_report(
             "Profile settings",
             [
-                {"title": "renders settings page", "ok": True, "duration": 610},
-                {"title": "updates display name", "ok": True, "duration": 1050},
-                {"title": "changes email address", "ok": True, "duration": 980},
-                {"title": "saves notification preferences", "ok": True, "duration": 780},
+                {"title": "renders account settings page",                     "ok": True, "duration": 680},
+                {"title": "updates display name and persists across reload",    "ok": True, "duration": 1180},
+                {"title": "changes email → receives verification link",        "ok": True, "duration": 2100},
+                {"title": "uploads avatar (JPEG, < 2 MB)",                     "ok": True, "duration": 1560},
+                {"title": "enables 2FA → shows QR code",                       "ok": True, "duration": 1350},
+                {"title": "saves notification preferences (email + push)",      "ok": True, "duration": 920},
+                {"title": "deletes account flow shows confirmation dialog",     "ok": True, "duration": 1040},
+                {"title": "connected OAuth providers list is populated",        "ok": True, "duration": 780},
             ],
         ),
     }
 
-    # Run 6 — 2 days ago: payment flow, chromium+firefox+webkit, passed (after fix)
+    # ---------------------------------------------------------------------------
+    # Run 6 — 2 days ago: payment flow, chromium+firefox+webkit, full pass (post-fix)
+    # ---------------------------------------------------------------------------
     run6 = {
         "id": _RUN_IDS[5],
         "spec_path": "tests/checkout/payment-flow.spec.ts",
         "exit_code": 0,
-        "duration_ms": 22410,
+        "duration_ms": 38720,
         "started_at": _ts(2.0, hour=11, minute=30),
         "browsers": ["chromium", "firefox", "webkit"],
         "trace_path": None,
@@ -314,30 +370,27 @@ def _build_seed_runs() -> list[dict]:
         "a11y_violations_count": 0,
         "stderr_tail": "",
         "json_report": _make_json_report(
-            "Payment flow (all browsers)",
+            "Payment flow (all browsers — release/2.8.0)",
             [
-                {"title": "loads checkout page", "ok": True, "duration": 880},
-                {"title": "fills in card details", "ok": True, "duration": 1220},
-                {"title": "completes Stripe checkout", "ok": True, "duration": 2950},
-                {"title": "shows order confirmation", "ok": True, "duration": 410},
+                {"title": "loads checkout page with order summary",             "ok": True, "duration": 980,
+                 "attachments": [_network_attachment(_net_checkout)]},
+                {"title": "applies promo code SAVE20 successfully",             "ok": True, "duration": 1320},
+                {"title": "fills card details in Stripe iframe",                "ok": True, "duration": 2180},
+                {"title": "completes Stripe 3DS checkout",                      "ok": True, "duration": 4250},
+                {"title": "shows order confirmation with order ID",             "ok": True, "duration": 510},
+                {"title": "sends order confirmation email (webhook verified)",  "ok": True, "duration": 2640},
             ],
         ),
     }
 
-    # Run 5 — 3 days ago: dashboard, chromium+firefox, passed
-    network_entries = [
-        {"request": {"method": "GET", "url": "https://app.example.com/api/metrics"},
-         "response": {"status": 200, "content": {"mimeType": "application/json"}}},
-        {"request": {"method": "GET", "url": "https://app.example.com/api/notifications"},
-         "response": {"status": 200, "content": {"mimeType": "application/json"}}},
-        {"request": {"method": "POST", "url": "https://app.example.com/api/analytics/pageview"},
-         "response": {"status": 204, "content": {"mimeType": "text/plain"}}},
-    ]
+    # ---------------------------------------------------------------------------
+    # Run 5 — 3 days ago: dashboard full suite, chromium+firefox, all 8 passed
+    # ---------------------------------------------------------------------------
     run5 = {
         "id": _RUN_IDS[4],
         "spec_path": "tests/dashboard/overview.spec.ts",
         "exit_code": 0,
-        "duration_ms": 6730,
+        "duration_ms": 14380,
         "started_at": _ts(3.0, hour=10, minute=0),
         "browsers": ["chromium", "firefox"],
         "trace_path": None,
@@ -347,23 +400,29 @@ def _build_seed_runs() -> list[dict]:
         "json_report": _make_json_report(
             "Dashboard overview",
             [
-                {"title": "loads dashboard for authenticated user", "ok": True, "duration": 1100,
-                 "attachments": [_network_attachment(network_entries)]},
-                {"title": "displays metric cards", "ok": True, "duration": 640},
-                {"title": "chart renders with data", "ok": True, "duration": 820},
-                {"title": "notifications bell shows count", "ok": True, "duration": 390},
+                {"title": "loads dashboard for authenticated user",             "ok": True, "duration": 1260,
+                 "attachments": [_network_attachment(_net_dashboard)]},
+                {"title": "displays all 4 KPI metric cards",                   "ok": True, "duration": 740},
+                {"title": "revenue chart renders with 30-day data",             "ok": True, "duration": 1080},
+                {"title": "notifications bell shows unread count badge",        "ok": True, "duration": 420},
+                {"title": "date range picker updates chart on change",          "ok": True, "duration": 1640},
+                {"title": "export CSV button triggers download",                "ok": True, "duration": 1180},
+                {"title": "team activity feed lists last 10 events",            "ok": True, "duration": 860},
+                {"title": "quick-action buttons are keyboard accessible",       "ok": True, "duration": 560},
             ],
         ),
     }
 
-    # Run 4 — 5 days ago: logout, chromium, passed
+    # ---------------------------------------------------------------------------
+    # Run 4 — 5 days ago: logout suite, chromium+firefox, all passed
+    # ---------------------------------------------------------------------------
     run4 = {
         "id": _RUN_IDS[3],
         "spec_path": "tests/auth/logout.spec.ts",
         "exit_code": 0,
-        "duration_ms": 2180,
+        "duration_ms": 5840,
         "started_at": _ts(5.0, hour=15, minute=48),
-        "browsers": ["chromium"],
+        "browsers": ["chromium", "firefox"],
         "trace_path": None,
         "screenshot_paths": [],
         "a11y_violations_count": 0,
@@ -371,19 +430,24 @@ def _build_seed_runs() -> list[dict]:
         "json_report": _make_json_report(
             "Logout flow",
             [
-                {"title": "clicking logout clears session", "ok": True, "duration": 850},
-                {"title": "redirects to login page", "ok": True, "duration": 620},
-                {"title": "protected pages require re-login", "ok": True, "duration": 710},
+                {"title": "clicking logout clears session cookies",             "ok": True, "duration": 890,
+                 "attachments": [_network_attachment(_net_auth)]},
+                {"title": "redirects to /login after sign-out",                "ok": True, "duration": 640},
+                {"title": "protected routes require re-authentication",         "ok": True, "duration": 760},
+                {"title": "refresh token is revoked on logout",                 "ok": True, "duration": 920},
+                {"title": "SSO session terminated via back-channel",            "ok": True, "duration": 1380},
             ],
         ),
     }
 
-    # Run 3 — 7 days ago: dashboard, chromium, FAILED (2 tests)
+    # ---------------------------------------------------------------------------
+    # Run 3 — 7 days ago: dashboard, chromium, FAILED — 2 tests (pre-fix regression)
+    # ---------------------------------------------------------------------------
     run3 = {
         "id": _RUN_IDS[2],
         "spec_path": "tests/dashboard/overview.spec.ts",
         "exit_code": 1,
-        "duration_ms": 9200,
+        "duration_ms": 15800,
         "started_at": _ts(7.0, hour=9, minute=5),
         "browsers": ["chromium"],
         "trace_path": None,
@@ -391,74 +455,78 @@ def _build_seed_runs() -> list[dict]:
         "a11y_violations_count": 0,
         "stderr_tail": (
             "  2 failed\n"
-            "  ● dashboard › chart renders with data\n"
+            "  ● Dashboard overview › revenue chart renders with 30-day data\n"
             "    Error: expect(received).toBeVisible()\n"
             "    Expected: visible\n"
-            "    Received: <div class='chart-container' style='display: none'>\n"
+            "    Received: <div class='recharts-responsive-container' style='display: none'>\n"
             "\n"
-            "  ● dashboard › notifications bell shows count\n"
-            "    Error: expected '0' to equal '3'"
+            "  ● Dashboard overview › notifications bell shows unread count badge\n"
+            "    Error: expected text content '0' to equal '4'\n"
+            "    Received: '0'\n"
+            "    Expected: '4'"
         ),
         "json_report": _make_json_report(
             "Dashboard overview",
             [
-                {"title": "loads dashboard for authenticated user", "ok": True, "duration": 980},
-                {"title": "displays metric cards", "ok": True, "duration": 590},
+                {"title": "loads dashboard for authenticated user",             "ok": True, "duration": 1100,
+                 "attachments": [_network_attachment(_net_dashboard)]},
+                {"title": "displays all 4 KPI metric cards",                   "ok": True, "duration": 680},
                 {
-                    "title": "chart renders with data",
+                    "title": "revenue chart renders with 30-day data",
                     "ok": False,
-                    "duration": 5000,
-                    "error": "Error: expect(received).toBeVisible() — element not visible",
+                    "duration": 8000,
+                    "error": "Error: expect(received).toBeVisible() — recharts-responsive-container not visible",
                 },
                 {
-                    "title": "notifications bell shows count",
+                    "title": "notifications bell shows unread count badge",
                     "ok": False,
                     "duration": 1200,
-                    "error": "Error: expected '0' to equal '3'",
+                    "error": "Error: expected text content '0' to equal '4'",
                 },
+                {"title": "date range picker updates chart on change",          "ok": True, "duration": 1640},
+                {"title": "export CSV button triggers download",                "ok": True, "duration": 1180},
             ],
         ),
     }
 
-    # Run 2 — 10 days ago: a11y homepage, chromium, passed, 1 violation
-    axe_violations_v2 = [
-        {
-            "id": "aria-required-attr",
-            "impact": "critical",
-            "description": "Required ARIA attributes must be provided",
-            "nodes": [{"target": ["[role=progressbar]"]}],
-        },
-    ]
+    # ---------------------------------------------------------------------------
+    # Run 2 — 10 days ago: full a11y homepage audit, chromium, 4 violations (pre-fix)
+    # ---------------------------------------------------------------------------
     run2 = {
         "id": _RUN_IDS[1],
         "spec_path": "tests/a11y/homepage-axe.spec.ts",
         "exit_code": 0,
-        "duration_ms": 3870,
+        "duration_ms": 7620,
         "started_at": _ts(10.0, hour=11, minute=20),
         "browsers": ["chromium"],
         "trace_path": None,
         "screenshot_paths": [],
-        "a11y_violations_count": 1,
+        "a11y_violations_count": 4,
         "stderr_tail": "",
         "json_report": _make_json_report(
             "Homepage accessibility audit",
             [
                 {
-                    "title": "homepage passes axe audit",
+                    "title": "homepage passes axe audit (WCAG 2.1 AA)",
                     "ok": True,
-                    "duration": 1800,
-                    "attachments": [_axe_attachment(axe_violations_v2)],
+                    "duration": 3240,
+                    "attachments": [_axe_attachment(_axe_homepage_v1)],
                 },
+                {"title": "nav links are keyboard-accessible (Tab order)",          "ok": True, "duration": 1040},
+                {"title": "skip-to-content link appears on first Tab press",        "ok": True, "duration": 820},
+                {"title": "hero CTA is reachable and activatable via keyboard",     "ok": True, "duration": 680},
             ],
         ),
     }
 
-    # Run 1 — 14 days ago: login, chromium, passed (baseline run)
+    # ---------------------------------------------------------------------------
+    # Run 1 — 14 days ago: login, chromium, passed (baseline — branch main)
+    # ---------------------------------------------------------------------------
     run1 = {
         "id": _RUN_IDS[0],
         "spec_path": "tests/auth/login.spec.ts",
         "exit_code": 0,
-        "duration_ms": 3050,
+        "duration_ms": 5940,
         "started_at": _ts(14.0, hour=10, minute=0),
         "browsers": ["chromium"],
         "trace_path": None,
@@ -466,12 +534,15 @@ def _build_seed_runs() -> list[dict]:
         "a11y_violations_count": 0,
         "stderr_tail": "",
         "json_report": _make_json_report(
-            "Login spec",
+            "Login flow",
             [
-                {"title": "displays login form", "ok": True, "duration": 420},
-                {"title": "logs in with valid credentials", "ok": True, "duration": 1100},
-                {"title": "shows error on invalid password", "ok": True, "duration": 790},
-                {"title": "redirects to dashboard after login", "ok": True, "duration": 740},
+                {"title": "renders login page with all form fields",          "ok": True, "duration": 460,
+                 "attachments": [_network_attachment(_net_auth)]},
+                {"title": "logs in with valid credentials → dashboard",       "ok": True, "duration": 1280},
+                {"title": "shows inline error on wrong password",             "ok": True, "duration": 840},
+                {"title": "shows inline error on unregistered email",         "ok": True, "duration": 700},
+                {"title": "redirects to returnTo path after login",           "ok": True, "duration": 860},
+                {"title": "rate-limits after 5 failed attempts",              "ok": True, "duration": 1100},
             ],
         ),
     }
@@ -487,120 +558,252 @@ def _build_seed_runs() -> list[dict]:
 _SPEC_SOURCES: dict[str, str] = {
     "tests/auth/login.spec.ts": """\
 import { test, expect } from '@playwright/test';
+import { captureNetworkHAR } from '../helpers/network';
 
 test.describe('Login flow', () => {
-  test('displays login form', async ({ page }) => {
-    await page.goto('https://app.example.com/login');
-    await expect(page.getByRole('heading', { name: 'Sign in' })).toBeVisible();
-    await expect(page.getByLabel('Email')).toBeVisible();
+  test.use({ baseURL: process.env.BASE_URL ?? 'https://app.acmecorp.io' });
+
+  test('renders login page with all form fields', async ({ page }) => {
+    await page.goto('/login');
+    await expect(page.getByRole('heading', { name: 'Sign in to Acme' })).toBeVisible();
+    await expect(page.getByLabel('Email address')).toBeVisible();
     await expect(page.getByLabel('Password')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Sign in' })).toBeEnabled();
+    await expect(page.getByTestId('oauth-google-btn')).toBeVisible();
   });
 
-  test('logs in with valid credentials', async ({ page }) => {
-    await page.goto('https://app.example.com/login');
-    await page.getByLabel('Email').fill('alice@example.com');
-    await page.getByLabel('Password').fill('correct-password');
+  test('logs in with valid credentials → dashboard', async ({ page }) => {
+    await captureNetworkHAR(page, 'network.json');
+    await page.goto('/login');
+    await page.getByLabel('Email address').fill(process.env.TEST_USER ?? 'alice@acmecorp.io');
+    await page.getByLabel('Password').fill(process.env.TEST_PASS ?? 's3cur3P@ss!');
     await page.getByRole('button', { name: 'Sign in' }).click();
     await expect(page).toHaveURL(/\\/dashboard/);
+    await expect(page.getByTestId('user-avatar')).toBeVisible();
   });
 
-  test('shows error on invalid password', async ({ page }) => {
-    await page.goto('https://app.example.com/login');
-    await page.getByLabel('Email').fill('alice@example.com');
-    await page.getByLabel('Password').fill('wrong-password');
+  test('shows inline error on wrong password', async ({ page }) => {
+    await page.goto('/login');
+    await page.getByLabel('Email address').fill('alice@acmecorp.io');
+    await page.getByLabel('Password').fill('wr0ng-p@ss');
     await page.getByRole('button', { name: 'Sign in' }).click();
     await expect(page.getByTestId('error-banner')).toHaveText(/invalid credentials/i);
+    await expect(page).toHaveURL(/\\/login/);
   });
 
-  test('redirects to dashboard after login', async ({ page }) => {
-    await page.goto('https://app.example.com/login?returnTo=/dashboard/analytics');
-    await page.getByLabel('Email').fill('alice@example.com');
-    await page.getByLabel('Password').fill('correct-password');
+  test('shows inline error on unregistered email', async ({ page }) => {
+    await page.goto('/login');
+    await page.getByLabel('Email address').fill('nobody@example.com');
+    await page.getByLabel('Password').fill('s3cur3P@ss!');
+    await page.getByRole('button', { name: 'Sign in' }).click();
+    await expect(page.getByTestId('error-banner')).toHaveText(/no account found/i);
+  });
+
+  test('redirects to returnTo path after login', async ({ page }) => {
+    await page.goto('/login?returnTo=/dashboard/analytics');
+    await page.getByLabel('Email address').fill('alice@acmecorp.io');
+    await page.getByLabel('Password').fill('s3cur3P@ss!');
     await page.getByRole('button', { name: 'Sign in' }).click();
     await expect(page).toHaveURL(/\\/dashboard\\/analytics/);
+  });
+
+  test('rate-limits after 5 failed attempts', async ({ page }) => {
+    await page.goto('/login');
+    for (let i = 0; i < 5; i++) {
+      await page.getByLabel('Email address').fill('alice@acmecorp.io');
+      await page.getByLabel('Password').fill('bad-pass');
+      await page.getByRole('button', { name: 'Sign in' }).click();
+    }
+    await expect(page.getByTestId('rate-limit-notice')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Sign in' })).toBeDisabled();
+  });
+
+  test('remember-me checkbox persists session 30 days', async ({ page, context }) => {
+    await page.goto('/login');
+    await page.getByLabel('Email address').fill('alice@acmecorp.io');
+    await page.getByLabel('Password').fill('s3cur3P@ss!');
+    await page.getByLabel('Keep me signed in').check();
+    await page.getByRole('button', { name: 'Sign in' }).click();
+    await expect(page).toHaveURL(/\\/dashboard/);
+    const cookies = await context.cookies();
+    const session = cookies.find((c) => c.name === 'sid');
+    expect(session?.expires).toBeGreaterThan(Date.now() / 1000 + 29 * 86_400);
   });
 });
 """,
     "tests/auth/logout.spec.ts": """\
 import { test, expect } from '@playwright/test';
+import { captureNetworkHAR } from '../helpers/network';
 
 test.describe('Logout flow', () => {
-  test('clicking logout clears session', async ({ page }) => {
-    await page.goto('https://app.example.com/dashboard');
+  test.use({ baseURL: process.env.BASE_URL ?? 'https://app.acmecorp.io' });
+
+  test('clicking logout clears session cookies', async ({ page, context }) => {
+    await captureNetworkHAR(page, 'network.json');
+    await page.goto('/dashboard');
     await page.getByRole('button', { name: 'Account menu' }).click();
     await page.getByRole('menuitem', { name: 'Sign out' }).click();
     await expect(page).toHaveURL(/\\/login/);
+    const cookies = await context.cookies();
+    expect(cookies.find((c) => c.name === 'sid')).toBeUndefined();
   });
 
-  test('redirects to login page', async ({ page }) => {
-    await page.goto('https://app.example.com/login');
-    await expect(page.getByRole('heading', { name: 'Sign in' })).toBeVisible();
+  test('redirects to /login after sign-out', async ({ page }) => {
+    await page.goto('/login');
+    await expect(page.getByRole('heading', { name: 'Sign in to Acme' })).toBeVisible();
   });
 
-  test('protected pages require re-login', async ({ page }) => {
-    await page.goto('https://app.example.com/dashboard');
+  test('protected routes require re-authentication', async ({ page }) => {
+    await page.goto('/dashboard');
     await expect(page).toHaveURL(/\\/login/);
+    await page.goto('/settings');
+    await expect(page).toHaveURL(/\\/login/);
+  });
+
+  test('refresh token is revoked on logout', async ({ page }) => {
+    await page.goto('/dashboard');
+    await page.getByRole('button', { name: 'Account menu' }).click();
+    await page.getByRole('menuitem', { name: 'Sign out' }).click();
+    // Attempt to use the refresh endpoint — should return 401.
+    const res = await page.request.post('/api/v2/auth/refresh');
+    expect(res.status()).toBe(401);
+  });
+
+  test('SSO session terminated via back-channel', async ({ page }) => {
+    await page.goto('/dashboard');
+    await page.getByRole('button', { name: 'Account menu' }).click();
+    await page.getByRole('menuitem', { name: 'Sign out' }).click();
+    await expect(page).toHaveURL(/\\/login/);
+    await expect(page.getByTestId('logout-success-banner')).toBeVisible();
   });
 });
 """,
     "tests/dashboard/overview.spec.ts": """\
 import { test, expect } from '@playwright/test';
+import { captureNetworkHAR } from '../helpers/network';
 
 test.describe('Dashboard overview', () => {
+  test.use({ baseURL: process.env.BASE_URL ?? 'https://app.acmecorp.io' });
+
   test('loads dashboard for authenticated user', async ({ page }) => {
-    await page.goto('https://app.example.com/dashboard');
+    await captureNetworkHAR(page, 'network.json');
+    await page.goto('/dashboard');
     await expect(page.getByTestId('dashboard-root')).toBeVisible();
+    await expect(page.getByTestId('sidebar-nav')).toBeVisible();
   });
 
-  test('displays metric cards', async ({ page }) => {
-    await page.goto('https://app.example.com/dashboard');
+  test('displays all 4 KPI metric cards', async ({ page }) => {
+    await page.goto('/dashboard');
     await expect(page.getByTestId('metric-total-users')).toBeVisible();
     await expect(page.getByTestId('metric-revenue')).toBeVisible();
     await expect(page.getByTestId('metric-conversions')).toBeVisible();
+    await expect(page.getByTestId('metric-churn-rate')).toBeVisible();
   });
 
-  test('chart renders with data', async ({ page }) => {
-    await page.goto('https://app.example.com/dashboard');
+  test('revenue chart renders with 30-day data', async ({ page }) => {
+    await page.goto('/dashboard');
     await expect(page.getByTestId('revenue-chart')).toBeVisible();
-    const bars = page.locator('[data-testid="chart-bar"]');
-    await expect(bars).toHaveCount(7);
+    const points = page.locator('[data-testid="chart-point"]');
+    await expect(points).toHaveCount(30);
   });
 
-  test('notifications bell shows count', async ({ page }) => {
-    await page.goto('https://app.example.com/dashboard');
+  test('notifications bell shows unread count badge', async ({ page }) => {
+    await page.goto('/dashboard');
     const badge = page.getByTestId('notification-badge');
-    await expect(badge).toHaveText('3');
+    await expect(badge).toBeVisible();
+    const count = parseInt(await badge.textContent() ?? '0', 10);
+    expect(count).toBeGreaterThan(0);
+  });
+
+  test('date range picker updates chart on change', async ({ page }) => {
+    await page.goto('/dashboard');
+    await page.getByTestId('date-range-picker').click();
+    await page.getByRole('option', { name: 'Last 90 days' }).click();
+    const points = page.locator('[data-testid="chart-point"]');
+    await expect(points).toHaveCount(90);
+  });
+
+  test('export CSV button triggers download', async ({ page }) => {
+    const [download] = await Promise.all([
+      page.waitForEvent('download'),
+      page.getByRole('button', { name: 'Export CSV' }).click(),
+    ]);
+    expect(download.suggestedFilename()).toMatch(/\\.csv$/);
+  });
+
+  test('team activity feed lists last 10 events', async ({ page }) => {
+    await page.goto('/dashboard');
+    const feed = page.getByTestId('activity-feed');
+    await expect(feed).toBeVisible();
+    const items = feed.locator('[data-testid="feed-item"]');
+    await expect(items).toHaveCount(10);
+  });
+
+  test('quick-action buttons are keyboard accessible', async ({ page }) => {
+    await page.goto('/dashboard');
+    await page.keyboard.press('Tab');
+    const focused = page.locator(':focus');
+    await expect(focused).toHaveAttribute('data-testid');
   });
 });
 """,
     "tests/checkout/payment-flow.spec.ts": """\
 import { test, expect } from '@playwright/test';
+import { captureNetworkHAR } from '../helpers/network';
 
 test.describe('Payment flow', () => {
-  test('loads checkout page', async ({ page }) => {
-    await page.goto('https://app.example.com/checkout');
+  test.use({ baseURL: process.env.BASE_URL ?? 'https://app.acmecorp.io' });
+
+  test('loads checkout page with order summary', async ({ page }) => {
+    await captureNetworkHAR(page, 'network.json');
+    await page.goto('/checkout?item=PRO-12M');
     await expect(page.getByRole('heading', { name: 'Checkout' })).toBeVisible();
     await expect(page.getByTestId('order-summary')).toBeVisible();
+    await expect(page.getByTestId('line-item-PRO-12M')).toBeVisible();
   });
 
-  test('fills in card details', async ({ page }) => {
-    await page.goto('https://app.example.com/checkout');
-    const stripe = page.frameLocator('iframe[name="stripe-card"]');
-    await stripe.getByPlaceholder('Card number').fill('4242 4242 4242 4242');
+  test('applies promo code SAVE20 successfully', async ({ page }) => {
+    await page.goto('/checkout?item=PRO-12M');
+    await page.getByTestId('promo-code-input').fill('SAVE20');
+    await page.getByRole('button', { name: 'Apply' }).click();
+    await expect(page.getByTestId('discount-line')).toContainText('−20%');
+    await expect(page.getByTestId('total-price')).toBeVisible();
+  });
+
+  test('fills card details in Stripe iframe', async ({ page }) => {
+    await page.goto('/checkout?item=PRO-12M');
+    const stripe = page.frameLocator('iframe[name="stripe-card-element"]');
+    await stripe.getByPlaceholder('1234 1234 1234 1234').fill('4242 4242 4242 4242');
     await stripe.getByPlaceholder('MM / YY').fill('12 / 28');
     await stripe.getByPlaceholder('CVC').fill('123');
+    await expect(page.getByRole('button', { name: 'Pay now' })).toBeEnabled();
   });
 
-  test('completes Stripe checkout', async ({ page }) => {
-    await page.goto('https://app.example.com/checkout?demo=1');
+  test('completes Stripe 3DS checkout', async ({ page }) => {
+    await page.goto('/checkout?item=PRO-12M&demo=1');
+    const stripe = page.frameLocator('iframe[name="stripe-card-element"]');
+    await stripe.getByPlaceholder('1234 1234 1234 1234').fill('4000 0025 0000 3155');
+    await stripe.getByPlaceholder('MM / YY').fill('12 / 28');
+    await stripe.getByPlaceholder('CVC').fill('123');
     await page.getByRole('button', { name: 'Pay now' }).click();
-    await expect(page.locator('.stripe-success')).toBeVisible({ timeout: 10_000 });
+    // Dismiss 3DS challenge
+    const challengeFrame = page.frameLocator('iframe[name="stripe-3ds-challenge"]');
+    await challengeFrame.getByRole('button', { name: 'Complete' }).click();
+    await expect(page.getByTestId('stripe-success-banner')).toBeVisible({ timeout: 15_000 });
   });
 
-  test('shows order confirmation', async ({ page }) => {
-    await page.goto('https://app.example.com/checkout/confirmation');
-    await expect(page.getByTestId('order-id')).toBeVisible();
+  test('shows order confirmation with order ID', async ({ page }) => {
+    await page.goto('/checkout/confirmation?order=ORD-20240601-4821');
+    await expect(page.getByTestId('order-id')).toHaveText(/ORD-\\d+/);
     await expect(page.getByRole('heading', { name: /order confirmed/i })).toBeVisible();
+  });
+
+  test('sends order confirmation email (webhook verified)', async ({ page }) => {
+    // Triggers webhook via test helper endpoint.
+    const res = await page.request.post('/api/v2/test/trigger-order-email?order=ORD-20240601-4821');
+    expect(res.status()).toBe(200);
+    const body = await res.json() as { delivered: boolean };
+    expect(body.delivered).toBe(true);
   });
 });
 """,
@@ -608,30 +811,67 @@ test.describe('Payment flow', () => {
 import { test, expect } from '@playwright/test';
 
 test.describe('Profile settings', () => {
-  test('renders settings page', async ({ page }) => {
-    await page.goto('https://app.example.com/settings');
+  test.use({ baseURL: process.env.BASE_URL ?? 'https://app.acmecorp.io' });
+
+  test('renders account settings page', async ({ page }) => {
+    await page.goto('/settings');
     await expect(page.getByRole('heading', { name: 'Account settings' })).toBeVisible();
+    await expect(page.getByTestId('tab-profile')).toBeVisible();
+    await expect(page.getByTestId('tab-security')).toBeVisible();
+    await expect(page.getByTestId('tab-notifications')).toBeVisible();
   });
 
-  test('updates display name', async ({ page }) => {
-    await page.goto('https://app.example.com/settings');
-    await page.getByLabel('Display name').fill('Alice Doe');
+  test('updates display name and persists across reload', async ({ page }) => {
+    await page.goto('/settings');
+    await page.getByLabel('Display name').fill('Alice Mercer');
     await page.getByRole('button', { name: 'Save changes' }).click();
     await expect(page.getByTestId('toast-success')).toHaveText(/saved/i);
+    await page.reload();
+    await expect(page.getByLabel('Display name')).toHaveValue('Alice Mercer');
   });
 
-  test('changes email address', async ({ page }) => {
-    await page.goto('https://app.example.com/settings');
-    await page.getByLabel('Email').fill('alice.new@example.com');
+  test('changes email → receives verification link', async ({ page }) => {
+    await page.goto('/settings');
+    await page.getByLabel('Email address').fill('alice.new@acmecorp.io');
     await page.getByRole('button', { name: 'Save changes' }).click();
+    await expect(page.getByTestId('email-verify-notice')).toBeVisible();
+    await expect(page.getByTestId('email-verify-notice')).toContainText(/verification link sent/i);
+  });
+
+  test('uploads avatar (JPEG, < 2 MB)', async ({ page }) => {
+    await page.goto('/settings');
+    await page.getByTestId('avatar-upload-btn').click();
+    await page.getByLabel('Choose file').setInputFiles('tests/fixtures/avatar-512.jpg');
+    await page.getByRole('button', { name: 'Save' }).click();
+    await expect(page.getByTestId('avatar-img')).toHaveAttribute('src', /\\/uploads\\//);
+  });
+
+  test('enables 2FA → shows QR code', async ({ page }) => {
+    await page.goto('/settings/security');
+    await page.getByRole('button', { name: 'Enable two-factor auth' }).click();
+    await expect(page.getByTestId('2fa-qr-code')).toBeVisible();
+    await expect(page.getByTestId('2fa-backup-codes')).toBeVisible();
+  });
+
+  test('saves notification preferences (email + push)', async ({ page }) => {
+    await page.goto('/settings/notifications');
+    await page.getByLabel('Weekly email digest').check();
+    await page.getByLabel('Push: new team member').check();
+    await page.getByRole('button', { name: 'Save preferences' }).click();
     await expect(page.getByTestId('toast-success')).toBeVisible();
   });
 
-  test('saves notification preferences', async ({ page }) => {
-    await page.goto('https://app.example.com/settings/notifications');
-    await page.getByLabel('Email digest').check();
-    await page.getByRole('button', { name: 'Save' }).click();
-    await expect(page.getByTestId('toast-success')).toBeVisible();
+  test('deletes account flow shows confirmation dialog', async ({ page }) => {
+    await page.goto('/settings/danger-zone');
+    await page.getByRole('button', { name: 'Delete my account' }).click();
+    await expect(page.getByRole('dialog', { name: 'Delete account?' })).toBeVisible();
+    await expect(page.getByTestId('confirm-delete-input')).toBeVisible();
+  });
+
+  test('connected OAuth providers list is populated', async ({ page }) => {
+    await page.goto('/settings/security');
+    const providers = page.locator('[data-testid="oauth-provider-row"]');
+    await expect(providers).toHaveCount(2);
   });
 });
 """,
@@ -640,24 +880,78 @@ import { test, expect } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
 
 test.describe('Homepage accessibility audit', () => {
-  test('homepage passes axe audit', async ({ page }) => {
-    await page.goto('https://app.example.com');
-    const results = await new AxeBuilder({ page }).analyze();
-    // Report violations as a JSON attachment for Silk's a11y tab.
+  test.use({ baseURL: process.env.BASE_URL ?? 'https://app.acmecorp.io' });
+
+  test('homepage passes axe audit (WCAG 2.1 AA)', async ({ page }) => {
+    await page.goto('/');
+    const results = await new AxeBuilder({ page })
+      .withTags(['wcag2a', 'wcag2aa', 'wcag21aa'])
+      .analyze();
+    // Attach violations JSON for Silk's a11y tab.
     await test.info().attach('axe-results.json', {
       contentType: 'application/json',
       body: JSON.stringify({ violations: results.violations }),
     });
-    // Check that no critical violations are present.
     const critical = results.violations.filter((v) => v.impact === 'critical');
-    expect(critical).toHaveLength(0);
+    expect(critical, `Critical violations: ${JSON.stringify(critical)}`).toHaveLength(0);
   });
 
-  test('nav links are keyboard-accessible', async ({ page }) => {
-    await page.goto('https://app.example.com');
+  test('nav links are keyboard-accessible (Tab order)', async ({ page }) => {
+    await page.goto('/');
     await page.keyboard.press('Tab');
     const focused = page.locator(':focus');
     await expect(focused).toHaveAttribute('href');
+    const href = await focused.getAttribute('href');
+    expect(href).not.toBeNull();
+  });
+
+  test('skip-to-content link appears on first Tab press', async ({ page }) => {
+    await page.goto('/');
+    await page.keyboard.press('Tab');
+    await expect(page.getByTestId('skip-to-content')).toBeFocused();
+  });
+
+  test('hero CTA is reachable and activatable via keyboard', async ({ page }) => {
+    await page.goto('/');
+    // Tab through until hero CTA is focused.
+    for (let i = 0; i < 10; i++) {
+      const focused = page.locator(':focus');
+      const testId = await focused.getAttribute('data-testid');
+      if (testId === 'hero-cta') break;
+      await page.keyboard.press('Tab');
+    }
+    await page.keyboard.press('Enter');
+    await expect(page).toHaveURL(/\\/(signup|register)/);
+  });
+
+  test('footer links have sufficient target size (≥44×44px)', async ({ page }) => {
+    await page.goto('/');
+    const footerLinks = page.locator('footer a');
+    const count = await footerLinks.count();
+    for (let i = 0; i < count; i++) {
+      const box = await footerLinks.nth(i).boundingBox();
+      if (box) {
+        expect(box.width * box.height).toBeGreaterThanOrEqual(44 * 8);
+      }
+    }
+  });
+
+  test('modal traps focus and dismisses with Escape', async ({ page }) => {
+    await page.goto('/');
+    await page.getByTestId('signup-modal-trigger').click();
+    const modal = page.getByRole('dialog');
+    await expect(modal).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(modal).not.toBeVisible();
+  });
+
+  test('colour-scheme toggle preserves contrast ratios', async ({ page }) => {
+    await page.goto('/');
+    await page.getByTestId('theme-toggle').click();
+    const results = await new AxeBuilder({ page })
+      .withRules(['color-contrast'])
+      .analyze();
+    expect(results.violations).toHaveLength(0);
   });
 });
 """,
@@ -815,9 +1109,9 @@ def _build_seed_environments() -> list[dict]:
             "id": _ENV_IDS["production"],
             "name": "Production",
             "variables": [
-                {"name": "BASE_URL",      "value": "https://app.example.com",         "enabled": True},
-                {"name": "API_URL",       "value": "https://api.example.com/v1",       "enabled": True},
-                {"name": "AUTH_TOKEN",    "value": "prod-token-abc123",                "enabled": True},
+                {"name": "BASE_URL",      "value": "https://app.acmecorp.io",          "enabled": True},
+                {"name": "API_URL",       "value": "https://api.acmecorp.io/v2",       "enabled": True},
+                {"name": "AUTH_TOKEN",    "value": "prod-token-eyJhbGciOiJSUzI1Ni",   "enabled": True},
                 {"name": "TIMEOUT_MS",    "value": "10000",                            "enabled": True},
                 {"name": "DEBUG",         "value": "false",                            "enabled": True},
             ],
@@ -826,12 +1120,12 @@ def _build_seed_environments() -> list[dict]:
             "id": _ENV_IDS["staging"],
             "name": "Staging",
             "variables": [
-                {"name": "BASE_URL",      "value": "https://staging.example.com",      "enabled": True},
-                {"name": "API_URL",       "value": "https://api.staging.example.com/v1","enabled": True},
-                {"name": "AUTH_TOKEN",    "value": "staging-token-xyz789",             "enabled": True},
+                {"name": "BASE_URL",      "value": "https://staging.acmecorp.io",      "enabled": True},
+                {"name": "API_URL",       "value": "https://api.staging.acmecorp.io/v2","enabled": True},
+                {"name": "AUTH_TOKEN",    "value": "stg-token-eyJhbGciOiJSUzI1Ni",    "enabled": True},
                 {"name": "TIMEOUT_MS",    "value": "15000",                            "enabled": True},
                 {"name": "DEBUG",         "value": "true",                             "enabled": True},
-                {"name": "FEATURE_FLAG",  "value": "checkout-v2",                     "enabled": True},
+                {"name": "FEATURE_FLAGS", "value": "checkout-v3,ai-recommendations",  "enabled": True},
             ],
         },
         {
@@ -839,8 +1133,8 @@ def _build_seed_environments() -> list[dict]:
             "name": "Local-dev",
             "variables": [
                 {"name": "BASE_URL",      "value": "http://localhost:3000",            "enabled": True},
-                {"name": "API_URL",       "value": "http://localhost:4000/v1",         "enabled": True},
-                {"name": "AUTH_TOKEN",    "value": "dev-token-local",                  "enabled": True},
+                {"name": "API_URL",       "value": "http://localhost:4000/v2",         "enabled": True},
+                {"name": "AUTH_TOKEN",    "value": "dev-token-insecure-local-only",    "enabled": True},
                 {"name": "TIMEOUT_MS",    "value": "30000",                            "enabled": True},
                 {"name": "DEBUG",         "value": "true",                             "enabled": True},
                 {"name": "MOCK_STRIPE",   "value": "true",                             "enabled": True},
@@ -882,9 +1176,9 @@ def _write_environments(envs: list[dict]) -> None:
 def _build_seed_globals() -> dict:
     return {
         "variables": [
-            {"name": "COMPANY_NAME",  "value": "Example Corp",             "enabled": True},
-            {"name": "SUPPORT_EMAIL", "value": "support@example.com",      "enabled": True},
-            {"name": "APP_VERSION",   "value": "2.4.1",                    "enabled": True},
+            {"name": "COMPANY_NAME",  "value": "Acme Corp",                "enabled": True},
+            {"name": "SUPPORT_EMAIL", "value": "support@acmecorp.io",      "enabled": True},
+            {"name": "APP_VERSION",   "value": "2.8.0",                    "enabled": True},
             {"name": "DEFAULT_LANG",  "value": "en",                       "enabled": True},
         ]
     }
@@ -941,98 +1235,189 @@ def _build_seed_history() -> list[dict]:
         {
             "id": _HISTORY_IDS[0],
             "method": "GET",
-            "url": "https://api.example.com/v1/users/me",
+            "url": "https://api.acmecorp.io/v2/users/me",
             "status": 200,
-            "elapsed_ms": 134.5,
+            "elapsed_ms": 87.4,
             "timestamp": _ts_epoch(0.01, hour=9, minute=22),
             "request_body": None,
-            "response_body": '{"id":"usr_01","email":"alice@example.com","name":"Alice Doe","role":"admin"}',
-            "request_headers": {"Authorization": "Bearer prod-token-abc123", "Accept": "application/json"},
-            "response_headers": {"Content-Type": "application/json", "X-Request-Id": "req-001"},
+            "response_body": (
+                '{"id":"usr_a1b2","email":"alice.mercer@acmecorp.io","name":"Alice Mercer",'
+                '"role":"admin","avatar_url":"https://cdn.acmecorp.io/avatars/alice.jpg",'
+                '"plan":"enterprise","mfa_enabled":true,"created_at":"2023-04-01T00:00:00Z"}'
+            ),
+            "request_headers": {
+                "Authorization": "Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9",
+                "Accept": "application/json",
+                "X-Client-Version": "2.8.0",
+            },
+            "response_headers": {
+                "Content-Type": "application/json; charset=utf-8",
+                "X-Request-Id": "req-a1b2-0001",
+                "X-RateLimit-Remaining": "498",
+                "Cache-Control": "private, max-age=30",
+            },
         },
         {
             "id": _HISTORY_IDS[1],
             "method": "POST",
-            "url": "https://api.example.com/v1/auth/login",
+            "url": "https://api.acmecorp.io/v2/auth/login",
             "status": 200,
-            "elapsed_ms": 287.3,
+            "elapsed_ms": 312.8,
             "timestamp": _ts_epoch(0.02, hour=9, minute=15),
-            "request_body": '{"email":"alice@example.com","password":"•••••••••"}',
-            "response_body": '{"access_token":"eyJhbGciOiJIUzI1NiJ9.example","expires_in":3600}',
-            "request_headers": {"Content-Type": "application/json"},
-            "response_headers": {"Content-Type": "application/json", "Set-Cookie": "session=abc; HttpOnly"},
+            "request_body": '{"email":"alice.mercer@acmecorp.io","password":"•••••••••••","remember_me":true}',
+            "response_body": (
+                '{"access_token":"eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.demo-payload.sig",'
+                '"refresh_token":"rt_1a2b3c4d5e6f","expires_in":3600,"token_type":"Bearer",'
+                '"user":{"id":"usr_a1b2","email":"alice.mercer@acmecorp.io","name":"Alice Mercer"}}'
+            ),
+            "request_headers": {
+                "Content-Type": "application/json",
+                "X-Client-Version": "2.8.0",
+            },
+            "response_headers": {
+                "Content-Type": "application/json; charset=utf-8",
+                "Set-Cookie": "sid=s1a2b3c4; Path=/; HttpOnly; Secure; SameSite=Strict",
+                "X-Request-Id": "req-a1b2-0002",
+            },
         },
         {
             "id": _HISTORY_IDS[2],
             "method": "GET",
-            "url": "https://api.example.com/v1/dashboard/metrics",
+            "url": "https://api.acmecorp.io/v2/dashboard/metrics?range=30d",
             "status": 200,
-            "elapsed_ms": 412.8,
+            "elapsed_ms": 438.2,
             "timestamp": _ts_epoch(0.5, hour=14, minute=5),
             "request_body": None,
-            "response_body": '{"total_users":12480,"revenue_usd":84320.50,"conversion_rate":0.034}',
-            "request_headers": {"Authorization": "Bearer prod-token-abc123"},
-            "response_headers": {"Content-Type": "application/json", "Cache-Control": "max-age=60"},
+            "response_body": (
+                '{"period":"30d","total_users":28_640,"active_users":19_820,'
+                '"revenue_usd":247_890.50,"mrr_usd":84_320.00,"arr_usd":1_011_840.00,'
+                '"conversion_rate":0.038,"churn_rate":0.012,"nps_score":71,'
+                '"top_plans":[{"name":"Pro","count":1840},{"name":"Enterprise","count":320}]}'
+            ),
+            "request_headers": {
+                "Authorization": "Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9",
+            },
+            "response_headers": {
+                "Content-Type": "application/json; charset=utf-8",
+                "Cache-Control": "private, max-age=60",
+                "X-Request-Id": "req-a1b2-0003",
+            },
         },
         {
             "id": _HISTORY_IDS[3],
             "method": "POST",
-            "url": "https://api.example.com/v1/checkout/sessions",
+            "url": "https://api.acmecorp.io/v2/checkout/sessions",
             "status": 201,
-            "elapsed_ms": 623.1,
+            "elapsed_ms": 584.6,
             "timestamp": _ts_epoch(1.0, hour=11, minute=30),
-            "request_body": '{"items":[{"sku":"PRO-12M","qty":1}],"currency":"USD"}',
-            "response_body": '{"session_id":"cs_test_abc123","url":"https://checkout.stripe.com/pay/cs_test_abc123","expires_at":1735000000}',
-            "request_headers": {"Content-Type": "application/json", "Authorization": "Bearer prod-token-abc123"},
-            "response_headers": {"Content-Type": "application/json", "Location": "/checkout/cs_test_abc123"},
+            "request_body": (
+                '{"items":[{"sku":"ENTERPRISE-12M","qty":1,"unit_price_usd":2999.00}],'
+                '"currency":"USD","promo_code":"SAVE20","customer_id":"cus_a1b2c3"}'
+            ),
+            "response_body": (
+                '{"session_id":"cs_live_a1b2c3d4e5","checkout_url":"https://checkout.stripe.com/pay/cs_live_a1b2c3d4e5",'
+                '"amount_usd":2399.20,"discount_applied":599.80,"expires_at":1769385600}'
+            ),
+            "request_headers": {
+                "Content-Type": "application/json",
+                "Authorization": "Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9",
+                "Idempotency-Key": "idem-a1b2-checkout-001",
+            },
+            "response_headers": {
+                "Content-Type": "application/json; charset=utf-8",
+                "Location": "/checkout/cs_live_a1b2c3d4e5",
+                "X-Request-Id": "req-a1b2-0004",
+            },
         },
         {
             "id": _HISTORY_IDS[4],
             "method": "GET",
-            "url": "https://api.example.com/v1/users?page=1&limit=20",
+            "url": "https://api.acmecorp.io/v2/users?page=1&limit=25&sort=created_at:desc",
             "status": 200,
-            "elapsed_ms": 198.4,
+            "elapsed_ms": 221.7,
             "timestamp": _ts_epoch(1.5, hour=16, minute=0),
             "request_body": None,
-            "response_body": '{"data":[{"id":"usr_01","email":"alice@example.com"},{"id":"usr_02","email":"bob@example.com"}],"total":2,"page":1}',
-            "request_headers": {"Authorization": "Bearer prod-token-abc123"},
-            "response_headers": {"Content-Type": "application/json"},
+            "response_body": (
+                '{"data":['
+                '{"id":"usr_a1b2","email":"alice.mercer@acmecorp.io","plan":"enterprise","created_at":"2023-04-01T00:00:00Z"},'
+                '{"id":"usr_c3d4","email":"bob.zhang@acmecorp.io","plan":"pro","created_at":"2023-06-15T00:00:00Z"},'
+                '{"id":"usr_e5f6","email":"carol.hayes@acmecorp.io","plan":"pro","created_at":"2023-07-20T00:00:00Z"},'
+                '{"id":"usr_g7h8","email":"dan.okoro@acmecorp.io","plan":"starter","created_at":"2024-01-10T00:00:00Z"}'
+                '],"total":28640,"page":1,"per_page":25,"pages":1146}'
+            ),
+            "request_headers": {
+                "Authorization": "Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9",
+            },
+            "response_headers": {
+                "Content-Type": "application/json; charset=utf-8",
+                "X-Total-Count": "28640",
+                "X-Request-Id": "req-a1b2-0005",
+            },
         },
         {
             "id": _HISTORY_IDS[5],
             "method": "PATCH",
-            "url": "https://api.example.com/v1/users/usr_01/settings",
+            "url": "https://api.acmecorp.io/v2/users/usr_a1b2/settings",
             "status": 422,
-            "elapsed_ms": 89.7,
+            "elapsed_ms": 94.3,
             "timestamp": _ts_epoch(2.0, hour=10, minute=45),
-            "request_body": '{"notification_email":"invalid-email"}',
-            "response_body": '{"detail":"Validation failed","errors":[{"field":"notification_email","msg":"Not a valid email address"}]}',
-            "request_headers": {"Content-Type": "application/json", "Authorization": "Bearer prod-token-abc123"},
-            "response_headers": {"Content-Type": "application/json"},
+            "request_body": '{"notification_email":"not-a-valid@@email","digest_frequency":"hourly"}',
+            "response_body": (
+                '{"error":"VALIDATION_FAILED","message":"Request body failed schema validation",'
+                '"details":['
+                '{"field":"notification_email","code":"INVALID_EMAIL","message":"Must be a valid RFC-5322 email address"},'
+                '{"field":"digest_frequency","code":"INVALID_ENUM","message":"Allowed values: daily, weekly, never"}'
+                ']}'
+            ),
+            "request_headers": {
+                "Content-Type": "application/json",
+                "Authorization": "Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9",
+            },
+            "response_headers": {
+                "Content-Type": "application/json; charset=utf-8",
+                "X-Request-Id": "req-a1b2-0006",
+            },
         },
         {
             "id": _HISTORY_IDS[6],
             "method": "DELETE",
-            "url": "https://api.example.com/v1/sessions/sess_xyz",
+            "url": "https://api.acmecorp.io/v2/sessions/sess_x9y8z7w6",
             "status": 204,
-            "elapsed_ms": 67.2,
+            "elapsed_ms": 58.1,
             "timestamp": _ts_epoch(3.0, hour=17, minute=55),
             "request_body": None,
             "response_body": None,
-            "request_headers": {"Authorization": "Bearer prod-token-abc123"},
-            "response_headers": {},
+            "request_headers": {
+                "Authorization": "Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9",
+                "X-Client-Version": "2.8.0",
+            },
+            "response_headers": {
+                "X-Request-Id": "req-a1b2-0007",
+            },
         },
         {
             "id": _HISTORY_IDS[7],
             "method": "GET",
-            "url": "https://api.example.com/v1/notifications?unread=true",
+            "url": "https://api.acmecorp.io/v2/notifications?unread=true&limit=10",
             "status": 200,
-            "elapsed_ms": 156.9,
+            "elapsed_ms": 143.6,
             "timestamp": _ts_epoch(5.0, hour=9, minute=8),
             "request_body": None,
-            "response_body": '{"notifications":[{"id":"n1","title":"Deployment succeeded","read":false},{"id":"n2","title":"New user signup","read":false}],"total":2}',
-            "request_headers": {"Authorization": "Bearer prod-token-abc123"},
-            "response_headers": {"Content-Type": "application/json"},
+            "response_body": (
+                '{"notifications":['
+                '{"id":"ntf_001","type":"deploy_success","title":"Deployment to production succeeded","body":"v2.8.0 deployed in 2m 14s","read":false,"created_at":"2026-06-01T07:04:00Z"},'
+                '{"id":"ntf_002","type":"new_signup","title":"New enterprise sign-up","body":"TechNova GmbH joined the Enterprise plan","read":false,"created_at":"2026-05-31T14:22:00Z"},'
+                '{"id":"ntf_003","type":"alert","title":"P95 latency spike — /api/v2/metrics","body":"P95 rose to 840ms (+340ms vs baseline) for 4 minutes","read":false,"created_at":"2026-05-31T11:05:00Z"},'
+                '{"id":"ntf_004","type":"payment","title":"Payment received — $2,399.20","body":"Invoice INV-2024-0841 paid by TechNova GmbH","read":false,"created_at":"2026-05-30T16:48:00Z"}'
+                '],"total_unread":4,"total":22}'
+            ),
+            "request_headers": {
+                "Authorization": "Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9",
+            },
+            "response_headers": {
+                "Content-Type": "application/json; charset=utf-8",
+                "X-Request-Id": "req-a1b2-0008",
+            },
         },
     ]
 
@@ -1106,58 +1491,58 @@ def _make_minimal_png(width: int = 4, height: int = 4,
 # run10 (login) → screenshot of login form
 _SCREENSHOT_DEFS = [
     {
-        "run_id":   _RUN_IDS[8],   # run9 — a11y
-        "filename": "homepage-screenshot.png",
-        "color":    (99, 102, 241),   # indigo — homepage colour
+        "run_id":   _RUN_IDS[8],   # run9 — a11y / homepage
+        "filename": "homepage-axe-audit-chromium.png",
+        "color":    (99, 102, 241),   # indigo — homepage hero colour
     },
     {
-        "run_id":   _RUN_IDS[4],   # run5 — dashboard
-        "filename": "dashboard-screenshot.png",
-        "color":    (16, 185, 129),   # emerald — dashboard
+        "run_id":   _RUN_IDS[4],   # run5 — dashboard overview
+        "filename": "dashboard-overview-chromium.png",
+        "color":    (16, 185, 129),   # emerald — dashboard KPI cards
     },
     {
-        "run_id":   _RUN_IDS[9],   # run10 — login
-        "filename": "login-form-screenshot.png",
-        "color":    (59, 130, 246),   # blue — login
+        "run_id":   _RUN_IDS[9],   # run10 — login flow
+        "filename": "login-form-filled-chromium.png",
+        "color":    (59, 130, 246),   # blue — login form
     },
 ]
 
 # Visual-regression baseline definitions — one per test_id × browser × viewport.
 _BASELINE_DEFS = [
     {
-        "test_id": "homepage passes axe audit",
-        "browser": "chromium",
-        "viewport": "1280x720",
-        "color": (99, 102, 241),
-        "approved_by": "alice@example.com",
-        "diff_ratio": 0.0,
+        "test_id":           "homepage passes axe audit (WCAG 2.1 AA)",
+        "browser":           "chromium",
+        "viewport":          "1440x900",
+        "color":             (99, 102, 241),
+        "approved_by":       "alice.mercer@acmecorp.io",
+        "diff_ratio":        0.0,
         "approved_at_offset": 0.5,   # days ago
     },
     {
-        "test_id": "homepage passes axe audit",
-        "browser": "firefox",
-        "viewport": "1280x720",
-        "color": (139, 92, 246),
-        "approved_by": "alice@example.com",
-        "diff_ratio": 0.0,
+        "test_id":           "homepage passes axe audit (WCAG 2.1 AA)",
+        "browser":           "firefox",
+        "viewport":          "1440x900",
+        "color":             (139, 92, 246),
+        "approved_by":       "alice.mercer@acmecorp.io",
+        "diff_ratio":        0.0,
         "approved_at_offset": 0.5,
     },
     {
-        "test_id": "loads checkout page",
-        "browser": "chromium",
-        "viewport": "1280x720",
-        "color": (245, 158, 11),
-        "approved_by": "bob@example.com",
-        "diff_ratio": 0.002,
+        "test_id":           "loads checkout page with order summary",
+        "browser":           "chromium",
+        "viewport":          "1440x900",
+        "color":             (245, 158, 11),
+        "approved_by":       "bob.zhang@acmecorp.io",
+        "diff_ratio":        0.0015,
         "approved_at_offset": 2.0,
     },
     {
-        "test_id": "loads dashboard for authenticated user",
-        "browser": "chromium",
-        "viewport": "1440x900",
-        "color": (16, 185, 129),
-        "approved_by": "alice@example.com",
-        "diff_ratio": 0.0,
+        "test_id":           "loads dashboard for authenticated user",
+        "browser":           "chromium",
+        "viewport":          "1920x1080",
+        "color":             (16, 185, 129),
+        "approved_by":       "alice.mercer@acmecorp.io",
+        "diff_ratio":        0.0,
         "approved_at_offset": 1.0,
     },
 ]
